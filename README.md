@@ -1,0 +1,134 @@
+# grimoire
+
+<div align="center">
+  <img src="./grimoire.svg" alt="grimoire" width="100%"/>
+</div>
+
+<br/>
+
+<div align="center">
+
+*A practitioner does not merely use tools.*
+*A practitioner binds them.*
+
+</div>
+
+---
+
+A unified spellbook for coding assistants — **Claude Code**, **Codex**, **OpenCode**, **Qoder**, and any that follow.
+
+One repo holds your skills, subagents, slash commands, and base instructions. One command installs them everywhere. Per-machine customisation lives outside git.
+
+---
+
+## Tome Structure
+
+```
+grimoire/
+├── AGENTS.md            # canonical base oath
+├── CLAUDE.md            # Claude-specific base oath
+├── skills/              # source may be nested; each leaf SKILL.md is one skill
+├── agents/   commands/  # flat: each .md file is one item
+│
+├── targets.toml         # assistant → install paths
+├── examples/local/      # copy-once templates for local/
+│
+├── local/               # per-machine overrides (gitignored)
+│   ├── config.toml      #   targets selection, disabled list
+│   ├── AGENTS.local.md  #   appended to AGENTS.md on install
+│   └── skills/ …        #   private items
+│
+├── grimoire.sh          # entry point: dispatches `install`, `doctor`, …
+└── scripts/
+    ├── grimoire-install # install logic
+    ├── grimoire-doctor  # diagnose conflicts and orphans
+    └── _grimoire-lib.sh # shared TOML/discovery helpers
+```
+
+Requires `bash` 4+ and `awk` — no Python or other runtime needed.
+
+---
+
+## Quick Start
+
+```bash
+# 1. Tell grimoire which machine this is.
+mkdir -p local
+cp examples/local/config.toml local/config.toml
+$EDITOR local/config.toml          # set targets = ["claude", ...]
+
+# 2. Install.
+./grimoire.sh install              # or: ./grimoire.sh install --dry-run
+```
+
+---
+
+## Per-Machine Customisation
+
+`local/` is gitignored. Put per-machine bits there:
+
+```toml
+# local/config.toml
+targets  = ["claude", "codex"]      # this machine installs to these
+disabled = [
+  "self/agents/eval-executor",      # turn off one of your own items
+]
+```
+
+```markdown
+<!-- local/AGENTS.local.md -->
+## Local Context
+This machine is the work laptop. Default repo root is ~/code/...
+```
+
+`AGENTS.md` and `CLAUDE.md` are separate base instruction files. They start from the same house style, but can diverge where Claude Code and AGENTS.md-reading tools need different guidance.
+
+On install, the file written to each assistant is `<repo>/<target.agents_md>` + `local/AGENTS.local.md`. Per assistant docs, the destination filename differs:
+
+- `claude` reads `~/.claude/CLAUDE.md`
+- `codex`, `opencode`, `qoder` read `AGENTS.md`
+
+Skill source directories may be nested to keep this repo organized, but the installer links each skill by its leaf directory name because Claude, Codex, and Qoder expect `skills/<skill-name>/SKILL.md`.
+
+You can also drop machine-private items into `local/skills/`, `local/agents/`, etc. Same name as a shared item → `local` wins.
+
+---
+
+## Adding a New Assistant
+
+Add a stanza to `targets.toml`:
+
+```toml
+[new-assistant]
+root      = "~/.new-assistant"
+agents_md = "AGENTS.md"
+skills    = "skills"      # or omit kinds the assistant doesn't support
+commands  = "commands"
+```
+
+Kind paths are relative to `root` by default. Use `~` or `/` when one assistant stores a kind elsewhere. No script changes are needed; `./grimoire.sh install new-assistant` works.
+
+Hooks are intentionally not supported yet. Each assistant registers hooks differently, usually through a config file rather than by scanning a synced directory.
+
+---
+
+## Doctor
+
+```bash
+./grimoire.sh doctor
+```
+
+Reports: missing local config, name collisions between self and local, broken symlinks left over in installed targets.
+
+---
+
+## Philosophy
+
+Most people configure tools. This grimoire *shapes* tools — nudging them toward a particular aesthetic, a particular way of reasoning, a particular voice.
+
+The goal is not to make AI assistants more capable. They are already capable.
+The goal is to make them *mine*.
+
+---
+
+*Here begins the work.*

@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+# grimoire-install — install grimoire content to AI assistant config directories.
+# Normally invoked via `./grimoire.sh install` at the repo root; runnable directly too.
+#
+# Usage:
+#   ./grimoire.sh install             Install to targets listed in local/config.toml.
+#   ./grimoire.sh install claude      Install to specific targets (must exist in targets.toml).
+#   ./grimoire.sh install --all       Install to every target in targets.toml.
+#   ./grimoire.sh install --dry-run   Preview without writing or symlinking.
+#   ./grimoire.sh install --no-prune  Don't remove orphan symlinks created by previous installs.
+
+set -euo pipefail
+# shellcheck source=_grimoire-lib.sh
+source "$(dirname -- "$0")/_grimoire-lib.sh"
+
+# ── Plan ───────────────────────────────────────────────────────────────────
+
+DISABLED=()
+is_disabled() {
+  local fqn=$1 d
+  for d in "${DISABLED[@]+"${DISABLED[@]}"}"; do
+    [[ "$d" == "$fqn" ]] && return 0
+  done
+  return 1
+}
+
+PLAN=""
+
+build_plan() {
+  PLAN=""
+  local -A origins=()
+  local -A paths=()
+  local kind name path fqn
+  for kind in "${KINDS[@]}"; do
+    origins=()
+    paths=()
+    while IFS=$'\t' read -r name path; do
+      [[ -z "$name" ]] && continue
+      fqn="self/$kind/$name"
+      if is_disabled "$fqn"; then
+        printf '  %sskip (disabled): %s%s\n' "$C_DIM" "$fqn" "$C_RESET"
+        continue
+      fi
+      if [[ -n "${origins[$name]+x}" ]]; then
+        die "duplicate self item name: $kind/$name"
+      fi
+      origins[$name]=self
+      paths[$name]=$path
+    done < <(discover "$kind" "$ROOT/$kind")
+
+    while IFS=$'\t' read -r name path; do
+      [[ -z "$name" ]] && continue
+      fqn="local/$kind/$name"
+      if is_disabled "$fqn"; then
+        printf '  %sskip (disabled): %s%s\n' "$C_DIM" "$fqn" "$C_RESET"
+        continue
+      fi
+      if [[ "${origins[$name]-}" == "local" ]]; then
+        die "duplicate local item name: $kind/$name"
+      fi
+      if [[ -n "${origins[$name]+x}" ]]; then
+        printf '  %s!%s %s/%s: self overridden by local\n' "$C_YELLOW" "$C_RESET" "$kind" "$name"
+      fi
+      origins[$name]=local
+      paths[$name]=$path
+    done < <(discover "$kind" "$LOCAL_DIR/$kind")
+
+    if [[ ${#origins[@]} -gt 0 ]]; then
+      while IFS= read -r name; do
+        PLAN+="$kind"$'\t'"$name"$'\t'"${paths[$name]}"$'\t'"${origins[$name]}"$'\n'
+      done < <(printf '%s\n' "${!origins[@]}" | LC_ALL=C sort)
+    fi
+  done
+}
+
+print_plan() {
+  printf '%s── plan ──%s\n' "$C_BOLD" "$C_RESET"
+  [[ -z "$PLAN" ]] && return 0
+  local kind name path origin
+  while IFS=$'\t' read -r kind name path origin; do
+    [[ -z "$kind" ]] && continue
+    printf '  %-10s %-32s %sfrom %s%s\n' "$kind" "$name" "$C_DIM" "$origin" "$C_RESET"
+  done <<< "$PLAN"
+}
+
+# ── Filesystem ops ─────────────────────────────────────────────────────────
+
+link_one() {
+  # Prints one of: ok, replace, would-link, linked
+  local src=$1 dst=$2 dry=$3 existing dst_dir
+  if [[ -L "$dst" ]]; then
+    existing=$(readlink "$dst")
+    if [[ "$existing" == "$src" ]]; then
+      printf 'ok'; return 0
+    fi
+    if [[ "$dry" == 1 ]]; then
+      printf 'replace'; return 0
+    fi
+    rm -- "$dst"
+  elif [[ -e "$dst" ]]; then
+    die "refusing to overwrite non-symlink: $dst"
+  fi
+  if [[ "$dry" == 1 ]]; then
+    printf 'would-link'; return 0
+  fi
+  dst_dir=$(dirname -- "$dst")
+  mkdir -p -- "$dst_dir" || die "cannot create directory: $dst_dir"
+  ln -s -- "$src" "$dst" || die "cannot create symlink: $dst"
+  printf 'linked'
+}
+
+render_agents_md() {
+  # Concatenate $1 (source) + AGENTS_LOCAL (if present) into $2 (output).
+  # Ensures a "\n\n" separator unless the base already ends with one.
+  local src=$1 out=$2 last
+  : > "$out"
+  [[ -f "$src" ]] && cat -- "$src" >> "$out"
+  if [[ -f "$AGENTS_LOCAL" ]]; then
+    last=$(tail -c 2 -- "$out" 2>/dev/null; printf X)
+    last="${last%X}"
+    [[ "$last" != $'\n\n' ]] && printf '\n\n' >> "$out"
+    cat -- "$AGENTS_LOCAL" >> "$out"
+  fi
+}
+
+install_target() {
+  local name=$1 dry=$2 prune=$3
+  local root_raw root_expanded agents_md_name
+  root_raw=$(target_field "$name" root)
+  root_expanded=$(expand_path "$root_raw")
+  printf '\n%s── %s ──%s %s%s%s\n' "$C_BOLD" "$name" "$C_RESET" "$C_DIM" "$root_raw" "$C_RESET"
+
+  agents_md_name=$(target_field "$name" agents_md)
+  if [[ -n "$agents_md_name" ]]; then
+    local src="$ROOT/$agents_md_name"
+    local dst="$root_expanded/$agents_md_name"
+    if [[ ! -f "$src" ]]; then
+      printf '  %s!%s agents-md %s missing from repo root — skipping\n' \
+        "$C_YELLOW" "$C_RESET" "$agents_md_name"
+    else
+      local tmp status
+      tmp=$(mktemp)
+      render_agents_md "$src" "$tmp"
+      if [[ "$dry" == 1 ]]; then
+        if [[ -f "$dst" && ! -L "$dst" ]] && cmp -s "$tmp" "$dst"; then
+          status="ok"
+        else
+          status="would-write"
+        fi
+      else
+        mkdir -p -- "$(dirname -- "$dst")"
+        [[ -L "$dst" ]] && rm -- "$dst"
+        cp -- "$tmp" "$dst" || die "cannot write agents-md: $dst"
+        status="written"
+      fi
+      rm -f -- "$tmp"
+      printf '  %sagents-md%s %s %s(%s)%s\n' \
+        "$C_GREEN" "$C_RESET" "$agents_md_name" "$C_DIM" "$status" "$C_RESET"
+    fi
+  fi
+
+  local kind kind_rel kind_root status entry entry_target rel keep k pdir
+  local p_kind p_name p_path p_origin
+  local -a kept=() find_depth=()
+  for kind in "${KINDS[@]}"; do
+    kind_rel=$(target_field "$name" "$kind")
+    [[ -z "$kind_rel" ]] && continue
+    kind_root=$(target_path "$root_expanded" "$kind_rel")
+    kept=()
+    if [[ -n "$PLAN" ]]; then
+      while IFS=$'\t' read -r p_kind p_name p_path p_origin; do
+        [[ "$p_kind" != "$kind" ]] && continue
+        kept+=("$p_name")
+        status=$(link_one "$p_path" "$kind_root/$p_name" "$dry")
+        printf '  %s%-20s%s %s %s← %s (%s)%s\n' \
+          "$C_CYAN" "$kind" "$C_RESET" "$p_name" "$C_DIM" "$p_origin" "$status" "$C_RESET"
+      done <<< "$PLAN"
+    fi
+
+    if [[ "$prune" == 1 && -d "$kind_root" ]]; then
+      # Skills used to be installed with nested category paths. Keep recursive
+      # pruning for that kind so old category links are cleaned up.
+      if [[ "$kind" == "skills" ]]; then
+        find_depth=()
+      else
+        find_depth=(-maxdepth 1)
+      fi
+      while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        entry_target=$(readlink "$entry" 2>/dev/null || true)
+        [[ -z "$entry_target" ]] && continue
+        case "$entry_target" in "$ROOT"/*) : ;; *) continue ;; esac
+        rel="${entry#"$kind_root"/}"
+        keep=0
+        for k in "${kept[@]+"${kept[@]}"}"; do
+          [[ "$k" == "$rel" ]] && { keep=1; break; }
+        done
+        [[ "$keep" == 1 ]] && continue
+        if [[ "$dry" == 1 ]]; then
+          printf '  %s%-20s%s %s %s(would remove orphan)%s\n' \
+            "$C_YELLOW" "prune" "$C_RESET" "$rel" "$C_DIM" "$C_RESET"
+        else
+          rm -- "$entry"
+          printf '  %s%-20s%s %s %s(removed orphan)%s\n' \
+            "$C_YELLOW" "prune" "$C_RESET" "$rel" "$C_DIM" "$C_RESET"
+          # Walk up rmdir'ing empty parents, stopping before kind_root.
+          pdir=$(dirname -- "$entry")
+          while [[ "$pdir" != "$kind_root" && "$pdir" != "/" && "$pdir" != "." ]]; do
+            rmdir -- "$pdir" 2>/dev/null || break
+            pdir=$(dirname -- "$pdir")
+          done
+        fi
+      done < <(find "$kind_root" -mindepth 1 "${find_depth[@]+"${find_depth[@]}"}" -type l 2>/dev/null)
+    fi
+  done
+}
+
+usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
+
+main() {
+  local -a chosen=()
+  local dry=0 prune=1 all=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all)      all=1; shift ;;
+      --dry-run)  dry=1; shift ;;
+      --no-prune) prune=0; shift ;;
+      -h|--help)  usage; exit 0 ;;
+      --)         shift; while [[ $# -gt 0 ]]; do chosen+=("$1"); shift; done ;;
+      -*)         die "unknown option: $1" ;;
+      *)          chosen+=("$1"); shift ;;
+    esac
+  done
+
+  load_targets_toml "$TARGETS_FILE"
+
+  if [[ -f "$LOCAL_CONFIG" ]]; then
+    local d
+    while IFS= read -r d; do
+      [[ -z "$d" ]] && continue
+      DISABLED+=("$d")
+    done < <(load_string_array "$LOCAL_CONFIG" disabled)
+  fi
+
+  if [[ "$all" == 1 ]]; then
+    chosen=("${TARGET_NAMES[@]+"${TARGET_NAMES[@]}"}")
+  elif [[ ${#chosen[@]} -eq 0 ]]; then
+    local t
+    while IFS= read -r t; do
+      [[ -z "$t" ]] && continue
+      chosen+=("$t")
+    done < <(load_string_array "$LOCAL_CONFIG" targets)
+    if [[ ${#chosen[@]} -eq 0 ]]; then
+      die "no targets specified — pass names, use --all, or set \`targets = [...]\` in local/config.toml"
+    fi
+  fi
+
+  local known t
+  for t in "${chosen[@]}"; do
+    if ! target_exists "$t"; then
+      known=$(IFS=', '; printf '%s' "${TARGET_NAMES[*]+${TARGET_NAMES[*]}}")
+      die "unknown target: $t (known: $known)"
+    fi
+  done
+
+  build_plan
+  print_plan
+
+  [[ "$dry" == 1 ]] && printf '\n%s(dry run — nothing written)%s\n' "$C_DIM" "$C_RESET"
+  for t in "${chosen[@]}"; do
+    install_target "$t" "$dry" "$prune"
+  done
+  printf '\n'
+}
+
+main "$@"

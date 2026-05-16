@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# grimoire-doctor — diagnose grimoire state: local config, name conflicts, orphan symlinks.
+#
+# Usage:
+#   ./grimoire.sh doctor
+#   ./grimoire.sh doctor --help
+
+set -euo pipefail
+# shellcheck source=_grimoire-lib.sh
+source "$(dirname -- "$0")/_grimoire-lib.sh"
+
+section() { printf '\n%s── %s ──%s\n' "$C_BOLD" "$1" "$C_RESET"; }
+usage() { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; }
+
+ISSUES=0
+
+check_local() {
+  section "local config"
+  if [[ ! -f "$LOCAL_CONFIG" ]]; then
+    printf '  %s?%s local/config.toml missing — copy from examples/local/config.toml\n' \
+      "$C_YELLOW" "$C_RESET"
+    ISSUES=$((ISSUES + 1))
+    return
+  fi
+  local -a targets=()
+  local t
+  while IFS= read -r t; do
+    [[ -z "$t" ]] && continue
+    targets+=("$t")
+  done < <(load_string_array "$LOCAL_CONFIG" targets)
+  if [[ ${#targets[@]} -eq 0 ]]; then
+    printf '  %s?%s local/config.toml has no `targets` set\n' "$C_YELLOW" "$C_RESET"
+    ISSUES=$((ISSUES + 1))
+  else
+    local joined="" sep=""
+    for t in "${targets[@]}"; do
+      joined+="$sep$t"; sep=", "
+      if ! target_exists "$t"; then
+        printf '  %s?%s local/config.toml target is unknown: %s\n' "$C_YELLOW" "$C_RESET" "$t"
+        ISSUES=$((ISSUES + 1))
+      fi
+    done
+    printf '  %s✔%s targets: %s\n' "$C_GREEN" "$C_RESET" "$joined"
+  fi
+}
+
+is_inside_skill() {
+  local d=$1 root=$2 parent
+  parent=$(dirname -- "$d")
+  while [[ "$parent" != "$root" && "$parent" != "/" && "$parent" != "." ]]; do
+    [[ -f "$parent/SKILL.md" ]] && return 0
+    parent=$(dirname -- "$parent")
+  done
+  return 1
+}
+
+check_skill_markers() {
+  section "skill markers"
+  local before=$ISSUES
+  local origin kind_root d rel child base has_any has_subdir
+  for origin in self local; do
+    if [[ "$origin" == "self" ]]; then
+      kind_root="$ROOT/skills"
+    else
+      kind_root="$LOCAL_DIR/skills"
+    fi
+    [[ -d "$kind_root" ]] || continue
+    while IFS= read -r d; do
+      [[ -z "$d" ]] && continue
+      [[ -f "$d/SKILL.md" ]] && continue
+      is_inside_skill "$d" "$kind_root" && continue
+      has_any=0
+      has_subdir=0
+      while IFS= read -r child; do
+        [[ -z "$child" ]] && continue
+        base=$(basename "$child")
+        case "$base" in
+          .gitkeep) continue ;;
+          .*) continue ;;
+        esac
+        has_any=1
+        [[ -d "$child" ]] && has_subdir=1
+      done < <(find "$d" -mindepth 1 -maxdepth 1 2>/dev/null)
+      [[ "$has_any" == 0 ]] && continue
+      [[ "$has_subdir" == 1 ]] && continue
+      rel="${d#$kind_root/}"
+      printf "  %s?%s %s/skills/%s: has files but no SKILL.md (won't be installed)\n" \
+        "$C_YELLOW" "$C_RESET" "$origin" "$rel"
+      ISSUES=$((ISSUES + 1))
+    done < <(find "$kind_root" -mindepth 1 -type d 2>/dev/null | LC_ALL=C sort)
+  done
+  if [[ "$ISSUES" == "$before" ]]; then
+    printf '  %s✔%s all skill dirs have SKILL.md\n' "$C_GREEN" "$C_RESET"
+  fi
+}
+
+check_conflicts() {
+  section "name conflicts"
+  local before=$ISSUES
+  local -A self_seen=()
+  local -A local_seen=()
+  local kind name
+  for kind in "${KINDS[@]}"; do
+    self_seen=()
+    local_seen=()
+    while IFS=$'\t' read -r name _; do
+      [[ -z "$name" ]] && continue
+      if [[ -n "${self_seen[$name]+x}" ]]; then
+        printf '  %s!%s %s/%s: duplicate self item name\n' \
+          "$C_YELLOW" "$C_RESET" "$kind" "$name"
+        ISSUES=$((ISSUES + 1))
+      fi
+      self_seen[$name]=1
+    done < <(discover "$kind" "$ROOT/$kind")
+    while IFS=$'\t' read -r name _; do
+      [[ -z "$name" ]] && continue
+      if [[ -n "${local_seen[$name]+x}" ]]; then
+        printf '  %s!%s %s/%s: duplicate local item name\n' \
+          "$C_YELLOW" "$C_RESET" "$kind" "$name"
+        ISSUES=$((ISSUES + 1))
+      fi
+      local_seen[$name]=1
+    done < <(discover "$kind" "$LOCAL_DIR/$kind")
+    for name in "${!self_seen[@]}"; do
+      if [[ -n "${local_seen[$name]+x}" ]]; then
+        printf '  %s!%s %s/%s: self < local (local wins on install)\n' \
+          "$C_YELLOW" "$C_RESET" "$kind" "$name"
+        ISSUES=$((ISSUES + 1))
+      fi
+    done
+  done
+  if [[ "$ISSUES" == "$before" ]]; then
+    printf '  %s✔%s no conflicts\n' "$C_GREEN" "$C_RESET"
+  fi
+}
+
+check_orphans() {
+  section "orphan symlinks"
+  local before=$ISSUES
+  local -a chosen=()
+  local t
+  while IFS= read -r t; do
+    [[ -z "$t" ]] && continue
+    chosen+=("$t")
+  done < <(load_string_array "$LOCAL_CONFIG" targets)
+  if [[ ${#chosen[@]} -eq 0 ]]; then
+    chosen=("${TARGET_NAMES[@]+"${TARGET_NAMES[@]}"}")
+  fi
+  local root kind rel kind_root entry link raw entry_rel
+  local -a find_depth=()
+  for t in "${chosen[@]+"${chosen[@]}"}"; do
+    raw=$(target_field "$t" root)
+    [[ -z "$raw" ]] && continue
+    root=$(expand_path "$raw")
+    for kind in "${KINDS[@]}"; do
+      rel=$(target_field "$t" "$kind")
+      [[ -z "$rel" ]] && continue
+      kind_root=$(target_path "$root" "$rel")
+      [[ -d "$kind_root" ]] || continue
+      if [[ "$kind" == "skills" ]]; then
+        find_depth=()
+      else
+        find_depth=(-maxdepth 1)
+      fi
+      while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        link=$(readlink "$entry" 2>/dev/null || true)
+        [[ -z "$link" ]] && continue
+        case "$link" in "$ROOT"/*) : ;; *) continue ;; esac
+        if [[ ! -e "$link" ]]; then
+          entry_rel="${entry#"$kind_root"/}"
+          printf '  %s✗%s %s:%s/%s → %s (broken)\n' \
+            "$C_RED" "$C_RESET" "$t" "$kind" "$entry_rel" "$link"
+          ISSUES=$((ISSUES + 1))
+        fi
+      done < <(find "$kind_root" -mindepth 1 "${find_depth[@]+"${find_depth[@]}"}" -type l 2>/dev/null)
+    done
+  done
+  if [[ "$ISSUES" == "$before" ]]; then
+    printf '  %s✔%s no broken symlinks\n' "$C_GREEN" "$C_RESET"
+  fi
+}
+
+main() {
+  if [[ $# -gt 0 ]]; then
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  fi
+  load_targets_toml "$TARGETS_FILE"
+  check_local
+  check_skill_markers
+  check_conflicts
+  check_orphans
+  printf '\n'
+  if [[ $ISSUES -gt 0 ]]; then
+    printf '%s%d issue(s) found%s\n' "$C_YELLOW" "$ISSUES" "$C_RESET"
+    exit 1
+  fi
+  printf '%s✔ all clear%s\n' "$C_GREEN" "$C_RESET"
+}
+
+main "$@"

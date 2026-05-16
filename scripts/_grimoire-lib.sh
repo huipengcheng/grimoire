@@ -1,0 +1,146 @@
+# Shared helpers for grimoire-install / grimoire-doctor. Sourced, not executable.
+# Defines: ROOT, LOCAL_DIR, AGENTS_LOCAL, TARGETS_FILE, LOCAL_CONFIG, KINDS,
+# C_* (ANSI colors), TARGET_NAMES, and the helpers below.
+
+_GRIMOIRE_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd -- "$_GRIMOIRE_LIB_DIR/.." && pwd)"
+LOCAL_DIR="$ROOT/local"
+AGENTS_LOCAL="$LOCAL_DIR/AGENTS.local.md"
+TARGETS_FILE="$ROOT/targets.toml"
+LOCAL_CONFIG="$LOCAL_DIR/config.toml"
+
+KINDS=(skills agents commands)
+
+if [[ -t 1 ]]; then
+  C_BOLD=$'\e[1m'; C_DIM=$'\e[2m'; C_GREEN=$'\e[32m'; C_YELLOW=$'\e[33m'
+  C_RED=$'\e[31m'; C_CYAN=$'\e[36m'; C_RESET=$'\e[0m'
+else
+  C_BOLD=""; C_DIM=""; C_GREEN=""; C_YELLOW=""; C_RED=""; C_CYAN=""; C_RESET=""
+fi
+
+die() { printf '%s\n' "$*" >&2; exit 1; }
+
+expand_path() {
+  local p=$1
+  case "$p" in
+    "~"|"~/"*) p="$HOME${p#"~"}" ;;
+  esac
+  printf '%s' "$p"
+}
+
+target_path() {
+  local root=$1 rel=$2
+  case "$rel" in
+    "~"|"~/"*|/*) expand_path "$rel" ;;
+    *) printf '%s/%s' "$root" "$rel" ;;
+  esac
+}
+
+_var_safe() { printf '%s' "${1//[^A-Za-z0-9_]/_}"; }
+
+# ── TOML loader ────────────────────────────────────────────────────────────
+# Minimal parser; supports the shape used by targets.toml and config.toml:
+#   - `[section]` headers
+#   - `key = "value"` string assignments
+#   - `key = [ "s1", "s2", ... ]` string arrays (inline or multi-line)
+
+declare -a TARGET_NAMES=()
+
+load_targets_toml() {
+  local file=$1 line key val cur="" safe
+  TARGET_NAMES=()
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+    if [[ "$line" =~ ^\[([^]]+)\][[:space:]]*$ ]]; then
+      cur="${BASH_REMATCH[1]}"
+      TARGET_NAMES+=("$cur")
+      continue
+    fi
+    [[ -z "$cur" ]] && continue
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*\"([^\"]*)\" ]]; then
+      key="${BASH_REMATCH[1]}"
+      val="${BASH_REMATCH[2]}"
+      safe=$(_var_safe "$cur")
+      printf -v "TARGET_${safe}_${key}" '%s' "$val"
+    fi
+  done < "$file"
+}
+
+target_field() {
+  local var="TARGET_$(_var_safe "$1")_$2"
+  printf '%s' "${!var-}"
+}
+
+target_exists() {
+  local n=$1 t
+  for t in "${TARGET_NAMES[@]+"${TARGET_NAMES[@]}"}"; do
+    [[ "$t" == "$n" ]] && return 0
+  done
+  return 1
+}
+
+load_string_array() {
+  local file=$1 key=$2
+  [[ -f "$file" ]] || return 0
+  awk -v k="$key" '
+    function strip_comment(s,   i, in_str, c) {
+      in_str = 0
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\"") in_str = !in_str
+        else if (c == "#" && !in_str) return substr(s, 1, i - 1)
+      }
+      return s
+    }
+    BEGIN { in_arr = 0 }
+    {
+      line = $0
+      if (!in_arr) {
+        re = "^[[:space:]]*" k "[[:space:]]*=[[:space:]]*\\["
+        if (match(line, re)) {
+          in_arr = 1
+          line = substr(line, RSTART + RLENGTH)
+        } else next
+      }
+      done = 0
+      if (index(line, "]") > 0) {
+        sub("\\].*", "", line)
+        in_arr = 0
+        done = 1
+      }
+      line = strip_comment(line)
+      while (match(line, /"[^"]*"/)) {
+        print substr(line, RSTART + 1, RLENGTH - 2)
+        line = substr(line, RSTART + RLENGTH)
+      }
+      if (done) exit
+    }
+  ' "$file"
+}
+
+# ── Discovery ──────────────────────────────────────────────────────────────
+# Print "name<TAB>path" lines for items of $kind under $root. Skill source
+# directories may be nested for repo organization, but installed skill names are
+# the leaf directory name because supported assistants expect skills/<name>/.
+discover() {
+  local kind=$1 root=$2 f dir p rel
+  [[ -d "$root" ]] || return 0
+  if [[ "$kind" == "skills" ]]; then
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      dir=$(dirname "$f")
+      rel=$(basename "$dir")
+      [[ -z "$rel" || "$dir" == "$root" ]] && continue  # SKILL.md at root: ignore
+      printf '%s\t%s\n' "$rel" "$dir"
+    done < <(find "$root" -type f -name SKILL.md 2>/dev/null | LC_ALL=C sort)
+    return 0
+  fi
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    printf '%s\t%s\n' "$(basename "$p")" "$p"
+  done < <(find "$root" -mindepth 1 -maxdepth 1 \
+           ! -name '.*' ! -name '.gitkeep' 2>/dev/null | LC_ALL=C sort)
+}

@@ -1,0 +1,14 @@
+# Per-machine grimoire configuration.
+#
+# Copy this file to local/config.toml on each machine and edit as needed.
+# The local/ directory is gitignored.
+
+# Which assistants to install on this machine. Must be keys in targets.toml.
+targets = ["claude"]
+
+# Disable items by fully-qualified name: "<origin>/<kind>/<name>".
+# Origins: "self" (grimoire's own) or "local" (this machine).
+disabled = [
+  # "self/agents/eval-executor",
+  # "self/skills/tdd",
+]

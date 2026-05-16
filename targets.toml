@@ -1,0 +1,51 @@
+# AI assistant install targets.
+#
+# `agents_md` is the filename to use both as source (read from <repo>/<agents_md>)
+# and destination (written to <root>/<agents_md>). Each kind (skills/agents/
+# commands) maps to a path relative to `root`, unless it starts with `~` or `/`.
+# Omit a kind to skip it.
+#
+# Hooks are intentionally not modeled yet. Supported assistants tend to
+# register hooks through config files, not by scanning a synced hooks directory.
+#
+# Paths below reflect current target behavior and this grimoire's install
+# conventions. Some assistant docs lag or disagree with runtime behavior.
+
+[claude]
+# https://code.claude.com/docs/en/claude-directory
+root      = "~/.claude"
+agents_md = "CLAUDE.md"
+skills    = "skills"
+agents    = "agents"
+commands  = "commands"
+
+[codex]
+# https://developers.openai.com/codex/guides/agents-md
+# https://developers.openai.com/codex/skills
+# Custom prompts under ~/.codex/prompts are deprecated; use skills instead.
+# The docs currently mention ~/.agents/skills, but this grimoire installs
+# Codex user skills under ~/.codex/skills to match the active local convention.
+# Codex custom agents live in ~/.codex/agents, but they are TOML config files,
+# not the shared Markdown agent format used by Claude/Qoder.
+root      = "~/.codex"
+agents_md = "AGENTS.md"
+skills    = "skills"
+
+[opencode]
+# https://opencode.ai/docs/config/ — plural directory names
+root      = "~/.config/opencode"
+agents_md = "AGENTS.md"
+skills    = "skills"
+agents    = "agents"
+commands  = "commands"
+
+[qoder]
+# https://docs.qoder.com/cli/using-cli
+# https://docs.qoder.com/cli/Skills
+# https://docs.qoder.com/en/cli/user-guide/subagent
+# https://docs.qoder.com/user-guide/commands
+root      = "~/.qoder"
+agents_md = "AGENTS.md"
+skills    = "skills"
+agents    = "agents"
+commands  = "commands"
