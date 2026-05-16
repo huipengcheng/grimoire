@@ -82,6 +82,19 @@ target_exists() {
   return 1
 }
 
+array_index() {
+  local needle=$1 item i=0
+  shift
+  for item in "$@"; do
+    if [[ "$item" == "$needle" ]]; then
+      printf '%s' "$i"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
 load_string_array() {
   local file=$1 key=$2
   [[ -f "$file" ]] || return 0

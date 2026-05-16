@@ -45,7 +45,7 @@ grimoire/
     └── _grimoire-lib.sh # shared TOML/discovery helpers
 ```
 
-Requires `bash` 4+ and `awk` — no Python or other runtime needed.
+Requires `bash` 3.2+ and `awk` — no Python or other runtime needed.
 
 ---
 

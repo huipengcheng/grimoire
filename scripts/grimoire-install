@@ -28,10 +28,12 @@ PLAN=""
 
 build_plan() {
   PLAN=""
-  local -A origins=()
-  local -A paths=()
-  local kind name path fqn
+  local -a names=()
+  local -a origins=()
+  local -a paths=()
+  local kind name path fqn idx line i
   for kind in "${KINDS[@]}"; do
+    names=()
     origins=()
     paths=()
     while IFS=$'\t' read -r name path; do
@@ -41,11 +43,12 @@ build_plan() {
         printf '  %sskip (disabled): %s%s\n' "$C_DIM" "$fqn" "$C_RESET"
         continue
       fi
-      if [[ -n "${origins[$name]+x}" ]]; then
+      if idx=$(array_index "$name" "${names[@]+"${names[@]}"}"); then
         die "duplicate self item name: $kind/$name"
       fi
-      origins[$name]=self
-      paths[$name]=$path
+      names+=("$name")
+      origins+=("self")
+      paths+=("$path")
     done < <(discover "$kind" "$ROOT/$kind")
 
     while IFS=$'\t' read -r name path; do
@@ -55,20 +58,31 @@ build_plan() {
         printf '  %sskip (disabled): %s%s\n' "$C_DIM" "$fqn" "$C_RESET"
         continue
       fi
-      if [[ "${origins[$name]-}" == "local" ]]; then
-        die "duplicate local item name: $kind/$name"
+      if idx=$(array_index "$name" "${names[@]+"${names[@]}"}"); then
+        if [[ "${origins[$idx]}" == "local" ]]; then
+          die "duplicate local item name: $kind/$name"
+        fi
+        printf '  %s!%s %s/%s: self overridden by local\n' \
+          "$C_YELLOW" "$C_RESET" "$kind" "$name"
+        origins[$idx]=local
+        paths[$idx]=$path
+      else
+        names+=("$name")
+        origins+=("local")
+        paths+=("$path")
       fi
-      if [[ -n "${origins[$name]+x}" ]]; then
-        printf '  %s!%s %s/%s: self overridden by local\n' "$C_YELLOW" "$C_RESET" "$kind" "$name"
-      fi
-      origins[$name]=local
-      paths[$name]=$path
     done < <(discover "$kind" "$LOCAL_DIR/$kind")
 
-    if [[ ${#origins[@]} -gt 0 ]]; then
-      while IFS= read -r name; do
-        PLAN+="$kind"$'\t'"$name"$'\t'"${paths[$name]}"$'\t'"${origins[$name]}"$'\n'
-      done < <(printf '%s\n' "${!origins[@]}" | LC_ALL=C sort)
+    if [[ ${#names[@]} -gt 0 ]]; then
+      while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        PLAN+="$line"$'\n'
+      done < <(
+        for ((i = 0; i < ${#names[@]}; i++)); do
+          printf '%s\t%s\t%s\t%s\n' \
+            "$kind" "${names[$i]}" "${paths[$i]}" "${origins[$i]}"
+        done | LC_ALL=C sort -t $'\t' -k2,2
+      )
     fi
   done
 }

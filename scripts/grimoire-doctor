@@ -97,32 +97,34 @@ check_skill_markers() {
 check_conflicts() {
   section "name conflicts"
   local before=$ISSUES
-  local -A self_seen=()
-  local -A local_seen=()
+  local -a self_seen=()
+  local -a local_seen=()
   local kind name
   for kind in "${KINDS[@]}"; do
     self_seen=()
     local_seen=()
     while IFS=$'\t' read -r name _; do
       [[ -z "$name" ]] && continue
-      if [[ -n "${self_seen[$name]+x}" ]]; then
+      if array_index "$name" "${self_seen[@]+"${self_seen[@]}"}" >/dev/null; then
         printf '  %s!%s %s/%s: duplicate self item name\n' \
           "$C_YELLOW" "$C_RESET" "$kind" "$name"
         ISSUES=$((ISSUES + 1))
+      else
+        self_seen+=("$name")
       fi
-      self_seen[$name]=1
     done < <(discover "$kind" "$ROOT/$kind")
     while IFS=$'\t' read -r name _; do
       [[ -z "$name" ]] && continue
-      if [[ -n "${local_seen[$name]+x}" ]]; then
+      if array_index "$name" "${local_seen[@]+"${local_seen[@]}"}" >/dev/null; then
         printf '  %s!%s %s/%s: duplicate local item name\n' \
           "$C_YELLOW" "$C_RESET" "$kind" "$name"
         ISSUES=$((ISSUES + 1))
+      else
+        local_seen+=("$name")
       fi
-      local_seen[$name]=1
     done < <(discover "$kind" "$LOCAL_DIR/$kind")
-    for name in "${!self_seen[@]}"; do
-      if [[ -n "${local_seen[$name]+x}" ]]; then
+    for name in "${self_seen[@]+"${self_seen[@]}"}"; do
+      if array_index "$name" "${local_seen[@]+"${local_seen[@]}"}" >/dev/null; then
         printf '  %s!%s %s/%s: self < local (local wins on install)\n' \
           "$C_YELLOW" "$C_RESET" "$kind" "$name"
         ISSUES=$((ISSUES + 1))
