@@ -35,7 +35,7 @@ grimoire/
 │
 ├── local/               # per-machine overrides (gitignored)
 │   ├── config.toml      #   targets selection, disabled list
-│   ├── AGENTS.local.md  #   appended to AGENTS.md on install
+│   ├── AGENTS.md        #   appended to AGENTS.md/CLAUDE.md on install
 │   └── skills/ …        #   private items
 │
 ├── grimoire.sh          # entry point: dispatches `install`, `doctor`, …
@@ -76,14 +76,14 @@ disabled = [
 ```
 
 ```markdown
-<!-- local/AGENTS.local.md -->
+<!-- local/AGENTS.md -->
 ## Local Context
 This machine is the work laptop. Default repo root is ~/code/...
 ```
 
 `AGENTS.md` and `CLAUDE.md` are separate base instruction files. They start from the same house style, but can diverge where Claude Code and AGENTS.md-reading tools need different guidance.
 
-On install, the file written to each assistant is `<repo>/<target.agents_md>` + `local/AGENTS.local.md`. Per assistant docs, the destination filename differs:
+On install, the file written to each assistant is `<repo>/<target.agents_md>` + `local/AGENTS.md`. Per assistant docs, the destination filename differs:
 
 - `claude` reads `~/.claude/CLAUDE.md`
 - `codex`, `opencode`, `qoder` read `AGENTS.md`

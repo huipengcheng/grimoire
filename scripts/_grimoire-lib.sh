@@ -5,7 +5,7 @@
 _GRIMOIRE_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd -- "$_GRIMOIRE_LIB_DIR/.." && pwd)"
 LOCAL_DIR="$ROOT/local"
-AGENTS_LOCAL="$LOCAL_DIR/AGENTS.local.md"
+AGENTS_LOCAL="$LOCAL_DIR/AGENTS.md"
 TARGETS_FILE="$ROOT/targets.toml"
 LOCAL_CONFIG="$LOCAL_DIR/config.toml"
 
