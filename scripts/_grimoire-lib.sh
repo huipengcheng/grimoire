@@ -1,13 +1,14 @@
 # Shared helpers for grimoire-install / grimoire-doctor. Sourced, not executable.
-# Defines: ROOT, LOCAL_DIR, AGENTS_LOCAL, TARGETS_FILE, LOCAL_CONFIG, KINDS,
-# C_* (ANSI colors), TARGET_NAMES, and the helpers below.
+# Defines: ROOT, LOCAL_DIR, AGENTS_LOCAL, REGISTRY_FILE, LOCAL_CONFIG,
+# STOW_ARTIFACT_DIR, KINDS, C_* (ANSI colors), TARGET_NAMES, and the helpers below.
 
 _GRIMOIRE_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd -- "$_GRIMOIRE_LIB_DIR/.." && pwd)"
 LOCAL_DIR="$ROOT/local"
 AGENTS_LOCAL="$LOCAL_DIR/AGENTS.md"
-TARGETS_FILE="$ROOT/targets.toml"
+REGISTRY_FILE="$ROOT/registry.toml"
 LOCAL_CONFIG="$LOCAL_DIR/config.toml"
+STOW_ARTIFACT_DIR="$ROOT/.grimoire-stow"
 
 KINDS=(skills agents commands)
 
@@ -77,7 +78,7 @@ link_target_path() {
 _var_safe() { printf '%s' "${1//[^A-Za-z0-9_]/_}"; }
 
 # ── TOML loader ────────────────────────────────────────────────────────────
-# Minimal parser; supports the shape used by targets.toml and config.toml:
+# Minimal parser; supports the shape used by registry.toml and config.toml:
 #   - `[section]` headers
 #   - `key = "value"` string assignments
 #   - `key = [ "s1", "s2", ... ]` string arrays (inline or multi-line)

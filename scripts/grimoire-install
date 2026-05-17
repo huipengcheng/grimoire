@@ -4,8 +4,8 @@
 #
 # Usage:
 #   ./grimoire.sh install             Install to targets listed in local/config.toml.
-#   ./grimoire.sh install claude      Install to specific targets (must exist in targets.toml).
-#   ./grimoire.sh install --all       Install to every target in targets.toml.
+#   ./grimoire.sh install claude      Install a specific target (must exist in registry.toml).
+#   ./grimoire.sh install --all       Install every target listed in local/config.toml.
 #   ./grimoire.sh install --dry-run   Preview without writing or stowing.
 #   ./grimoire.sh install --no-prune  Don't remove orphan symlinks created by previous installs.
 
@@ -13,7 +13,6 @@ set -euo pipefail
 # shellcheck source=_grimoire-lib.sh
 source "$(dirname -- "$0")/_grimoire-lib.sh"
 
-STOW_ARTIFACT_DIR="$ROOT/.grimoire-stow"
 TEMP_ARTIFACT_DIR=""
 
 # ── Plan ───────────────────────────────────────────────────────────────────
@@ -301,7 +300,7 @@ main() {
     esac
   done
 
-  load_targets_toml "$TARGETS_FILE"
+  load_targets_toml "$REGISTRY_FILE"
 
   if [[ -f "$LOCAL_CONFIG" ]]; then
     local d
@@ -311,16 +310,15 @@ main() {
     done < <(load_string_array "$LOCAL_CONFIG" disabled)
   fi
 
-  if [[ "$all" == 1 ]]; then
-    chosen=("${TARGET_NAMES[@]+"${TARGET_NAMES[@]}"}")
-  elif [[ ${#chosen[@]} -eq 0 ]]; then
+  if [[ "$all" == 1 || ${#chosen[@]} -eq 0 ]]; then
+    chosen=()
     local t
     while IFS= read -r t; do
       [[ -z "$t" ]] && continue
       chosen+=("$t")
     done < <(load_string_array "$LOCAL_CONFIG" targets)
     if [[ ${#chosen[@]} -eq 0 ]]; then
-      die "no targets specified — pass names, use --all, or set \`targets = [...]\` in local/config.toml"
+      die "no targets specified — pass names or set \`targets = [...]\` in local/config.toml"
     fi
   fi
 

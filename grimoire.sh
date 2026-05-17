@@ -3,6 +3,7 @@
 #
 # Usage:
 #   ./grimoire.sh install [args...]   Deploy grimoire content to assistant config dirs.
+#   ./grimoire.sh uninstall [args...] Remove grimoire content from assistant config dirs.
 #   ./grimoire.sh doctor              Diagnose local config, conflicts, orphan symlinks.
 #   ./grimoire.sh <command> --help    Per-command help where supported.
 

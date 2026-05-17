@@ -3,7 +3,7 @@
 # Copy this file to local/config.toml on each machine and edit as needed.
 # The local/ directory is gitignored.
 
-# Which assistants to install on this machine. Must be keys in targets.toml.
+# Which assistants to install on this machine. Must be keys in registry.toml.
 targets = ["claude"]
 
 # Disable items by fully-qualified name: "<origin>/<kind>/<name>".

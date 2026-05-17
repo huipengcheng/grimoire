@@ -190,7 +190,7 @@ main() {
       *) die "unknown option: $1" ;;
     esac
   fi
-  load_targets_toml "$TARGETS_FILE"
+  load_targets_toml "$REGISTRY_FILE"
   check_local
   check_skill_markers
   check_conflicts

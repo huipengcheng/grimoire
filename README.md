@@ -30,7 +30,7 @@ grimoire/
 ├── skills/              # source may be nested; each leaf SKILL.md is one skill
 ├── agents/   commands/  # flat: each .md file is one item
 │
-├── targets.toml         # assistant → install paths
+├── registry.toml        # assistant → install paths
 ├── examples/local/      # copy-once templates for local/
 │
 ├── local/               # per-machine overrides (gitignored)
@@ -59,6 +59,14 @@ $EDITOR local/config.toml          # set targets = ["claude", ...]
 
 # 2. Install.
 ./grimoire.sh install              # or: ./grimoire.sh install --dry-run
+```
+
+`install` with no target names installs every target listed in `local/config.toml`.
+`install --all` does the same thing; it does not install every target in `registry.toml`.
+
+```bash
+./grimoire.sh uninstall qoder      # remove one target
+./grimoire.sh uninstall --dry-run qoder
 ```
 
 ---
@@ -96,7 +104,7 @@ You can also drop machine-private items into `local/skills/`, `local/agents/`, e
 
 ## Adding a New Assistant
 
-Add a stanza to `targets.toml`:
+Add a stanza to `registry.toml`:
 
 ```toml
 [new-assistant]

@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# grimoire-uninstall — remove grimoire content from AI assistant config directories.
+#
+# Usage:
+#   ./grimoire.sh uninstall qoder      Uninstall one target.
+#   ./grimoire.sh uninstall --all      Uninstall every target listed in local/config.toml.
+#   ./grimoire.sh uninstall --dry-run  Preview without removing links or artifacts.
+
+set -euo pipefail
+# shellcheck source=_grimoire-lib.sh
+source "$(dirname -- "$0")/_grimoire-lib.sh"
+
+usage() { sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; }
+
+require_stow() {
+  command -v stow >/dev/null 2>&1 || die "GNU Stow is required but was not found in PATH"
+}
+
+is_owned_link() {
+  local path=$1 target
+  [[ -L "$path" ]] || return 1
+  target=$(link_target_path "$path")
+  [[ -n "$target" ]] || return 1
+  case "$target" in "$ROOT"/*) return 0 ;; *) return 1 ;; esac
+}
+
+remove_owned_link() {
+  local path=$1 dry=$2 label=$3 target
+  is_owned_link "$path" || return 0
+  target=$(link_target_path "$path")
+  if [[ "$dry" == 1 ]]; then
+    printf '  %s%-20s%s %s %s(would remove → %s)%s\n' \
+      "$C_YELLOW" "$label" "$C_RESET" "$path" "$C_DIM" "$target" "$C_RESET"
+  else
+    rm -- "$path"
+    printf '  %s%-20s%s %s %s(removed → %s)%s\n' \
+      "$C_YELLOW" "$label" "$C_RESET" "$path" "$C_DIM" "$target" "$C_RESET"
+  fi
+}
+
+remove_owned_links_under() {
+  local root=$1 dry=$2 label=$3 recursive=$4
+  local entry pdir
+  local -a find_depth=()
+  if [[ -L "$root" ]]; then
+    remove_owned_link "$root" "$dry" "$label"
+    return 0
+  fi
+  [[ -d "$root" ]] || return 0
+  [[ "$recursive" == 1 ]] || find_depth=(-maxdepth 1)
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    remove_owned_link "$entry" "$dry" "$label"
+    [[ "$dry" == 1 || -e "$entry" ]] && continue
+    pdir=$(dirname -- "$entry")
+    while [[ "$pdir" != "$root" && "$pdir" != "/" && "$pdir" != "." ]]; do
+      rmdir -- "$pdir" 2>/dev/null || break
+      pdir=$(dirname -- "$pdir")
+    done
+  done < <(find "$root" -mindepth 1 "${find_depth[@]+"${find_depth[@]}"}" -type l 2>/dev/null)
+  [[ "$dry" == 1 ]] || rmdir -- "$root" 2>/dev/null || true
+}
+
+unstow_package() {
+  local target_artifact=$1 target_dir=$2 package=$3 dry=$4
+  [[ -d "$target_artifact/$package" ]] || return 0
+  [[ -d "$target_dir" && ! -L "$target_dir" ]] || return 0
+  if [[ "$dry" == 1 ]]; then
+    printf '  %s%-20s%s %s %s(would unstow)%s\n' \
+      "$C_CYAN" "$package" "$C_RESET" "$target_dir" "$C_DIM" "$C_RESET"
+    return 0
+  fi
+  stow -D -d "$target_artifact" -t "$target_dir" "$package" >/dev/null ||
+    die "stow uninstall failed for package '$package' from $target_dir"
+  printf '  %s%-20s%s %s %s(unstowed)%s\n' \
+    "$C_CYAN" "$package" "$C_RESET" "$target_dir" "$C_DIM" "$C_RESET"
+}
+
+remove_target_artifact() {
+  local target_artifact=$1 name=$2 dry=$3
+  [[ -d "$target_artifact" ]] || return 0
+  if [[ "$dry" == 1 ]]; then
+    printf '  %s%-20s%s %s %s(would remove)%s\n' \
+      "$C_YELLOW" "artifact" "$C_RESET" "$target_artifact" "$C_DIM" "$C_RESET"
+    return 0
+  fi
+  [[ "$target_artifact" == "$STOW_ARTIFACT_DIR/$name" ]] ||
+    die "refusing to remove unexpected artifact dir: $target_artifact"
+  rm -rf -- "$target_artifact"
+  printf '  %s%-20s%s %s %s(removed)%s\n' \
+    "$C_YELLOW" "artifact" "$C_RESET" "$target_artifact" "$C_DIM" "$C_RESET"
+}
+
+uninstall_target() {
+  local name=$1 dry=$2
+  local root_raw root_expanded agents_md_name target_artifact
+  local kind kind_rel kind_root recursive
+  root_raw=$(target_field "$name" root)
+  root_expanded=$(expand_path "$root_raw")
+  target_artifact="$STOW_ARTIFACT_DIR/$name"
+  printf '\n%s── %s ──%s %s%s%s\n' "$C_BOLD" "$name" "$C_RESET" "$C_DIM" "$root_raw" "$C_RESET"
+
+  agents_md_name=$(target_field "$name" agents_md)
+  if [[ -n "$agents_md_name" ]]; then
+    remove_owned_link "$root_expanded/$agents_md_name" "$dry" agents-md
+    unstow_package "$target_artifact" "$root_expanded" agents-md "$dry"
+  fi
+
+  for kind in "${KINDS[@]}"; do
+    kind_rel=$(target_field "$name" "$kind")
+    [[ -z "$kind_rel" ]] && continue
+    kind_root=$(target_path "$root_expanded" "$kind_rel")
+    recursive=0
+    [[ "$kind" == "skills" ]] && recursive=1
+    if [[ -L "$kind_root" ]]; then
+      remove_owned_link "$kind_root" "$dry" "$kind"
+      continue
+    fi
+    unstow_package "$target_artifact" "$kind_root" "$kind" "$dry"
+    remove_owned_links_under "$kind_root" "$dry" "$kind" "$recursive"
+  done
+
+  remove_target_artifact "$target_artifact" "$name" "$dry"
+}
+
+main() {
+  local -a chosen=()
+  local dry=0 all=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all)      all=1; shift ;;
+      --dry-run)  dry=1; shift ;;
+      -h|--help)  usage; exit 0 ;;
+      --)         shift; while [[ $# -gt 0 ]]; do chosen+=("$1"); shift; done ;;
+      -*)         die "unknown option: $1" ;;
+      *)          chosen+=("$1"); shift ;;
+    esac
+  done
+
+  load_targets_toml "$REGISTRY_FILE"
+
+  if [[ "$all" == 1 ]]; then
+    chosen=()
+    local t
+    while IFS= read -r t; do
+      [[ -z "$t" ]] && continue
+      chosen+=("$t")
+    done < <(load_string_array "$LOCAL_CONFIG" targets)
+  fi
+  if [[ ${#chosen[@]} -eq 0 ]]; then
+    die "no targets specified — pass names or use --all with \`targets = [...]\` in local/config.toml"
+  fi
+
+  local known t
+  for t in "${chosen[@]}"; do
+    if ! target_exists "$t"; then
+      known=$(IFS=', '; printf '%s' "${TARGET_NAMES[*]+${TARGET_NAMES[*]}}")
+      die "unknown target: $t (known: $known)"
+    fi
+  done
+
+  require_stow
+  [[ "$dry" == 1 ]] && printf '\n%s(dry run — nothing removed)%s\n' "$C_DIM" "$C_RESET"
+  for t in "${chosen[@]}"; do
+    uninstall_target "$t" "$dry"
+  done
+  [[ "$dry" == 1 ]] || rmdir -- "$STOW_ARTIFACT_DIR" 2>/dev/null || true
+  printf '\n'
+}
+
+main "$@"
