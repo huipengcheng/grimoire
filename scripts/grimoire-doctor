@@ -166,10 +166,10 @@ check_orphans() {
       fi
       while IFS= read -r entry; do
         [[ -z "$entry" ]] && continue
-        link=$(readlink "$entry" 2>/dev/null || true)
+        link=$(link_target_path "$entry")
         [[ -z "$link" ]] && continue
         case "$link" in "$ROOT"/*) : ;; *) continue ;; esac
-        if [[ ! -e "$link" ]]; then
+        if [[ ! -e "$entry" ]]; then
           entry_rel="${entry#"$kind_root"/}"
           printf '  %s✗%s %s:%s/%s → %s (broken)\n' \
             "$C_RED" "$C_RESET" "$t" "$kind" "$entry_rel" "$link"

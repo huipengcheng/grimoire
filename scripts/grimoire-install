@@ -6,12 +6,15 @@
 #   ./grimoire.sh install             Install to targets listed in local/config.toml.
 #   ./grimoire.sh install claude      Install to specific targets (must exist in targets.toml).
 #   ./grimoire.sh install --all       Install to every target in targets.toml.
-#   ./grimoire.sh install --dry-run   Preview without writing or symlinking.
+#   ./grimoire.sh install --dry-run   Preview without writing or stowing.
 #   ./grimoire.sh install --no-prune  Don't remove orphan symlinks created by previous installs.
 
 set -euo pipefail
 # shellcheck source=_grimoire-lib.sh
 source "$(dirname -- "$0")/_grimoire-lib.sh"
+
+STOW_ARTIFACT_DIR="$ROOT/.grimoire-stow"
+TEMP_ARTIFACT_DIR=""
 
 # ── Plan ───────────────────────────────────────────────────────────────────
 
@@ -99,14 +102,63 @@ print_plan() {
 
 # ── Filesystem ops ─────────────────────────────────────────────────────────
 
-link_one() {
-  # Prints one of: ok, replace, would-link, linked
-  local src=$1 dst=$2 dry=$3 existing dst_dir
-  if [[ -L "$dst" ]]; then
-    existing=$(readlink "$dst")
-    if [[ "$existing" == "$src" ]]; then
-      printf 'ok'; return 0
+require_stow() {
+  command -v stow >/dev/null 2>&1 || die "GNU Stow is required but was not found in PATH"
+}
+
+cleanup_temp_artifact() {
+  [[ -n "$TEMP_ARTIFACT_DIR" ]] && rm -rf -- "$TEMP_ARTIFACT_DIR"
+}
+
+prepare_artifact_root() {
+  local artifact=$1
+  mkdir -p -- "$artifact" || die "cannot create artifact dir: $artifact"
+}
+
+prepare_target_artifact() {
+  local target_artifact=$1 dry=$2 name=$3
+  if [[ "$dry" == 0 ]]; then
+    [[ "$target_artifact" == "$STOW_ARTIFACT_DIR/$name" ]] ||
+      die "refusing to clear unexpected target artifact dir: $target_artifact"
+    rm -rf -- "$target_artifact"
+  fi
+  mkdir -p -- "$target_artifact" || die "cannot create target artifact dir: $target_artifact"
+}
+
+materialize_item() {
+  local src=$1 dst=$2 dst_dir
+  if [[ -d "$src" && ! -L "$src" ]]; then
+    mkdir -p -- "$dst" || die "cannot create artifact item: $dst"
+    cp -R -- "$src"/. "$dst"/ || die "cannot materialize item: $src"
+  else
+    dst_dir=$(dirname -- "$dst")
+    mkdir -p -- "$dst_dir" || die "cannot create artifact directory: $dst_dir"
+    cp -R -- "$src" "$dst" || die "cannot materialize item: $src"
+  fi
+}
+
+prepare_stow_destination() {
+  # Prints one of: replace, would-stow, stowed
+  local dst=$1 dry=$2 mode=$3
+  if [[ "$mode" == "agents-md" ]]; then
+    if [[ -e "$dst" && ! -L "$dst" && -d "$dst" ]]; then
+      die "refusing to overwrite directory: $dst"
     fi
+    if [[ -L "$dst" || -e "$dst" ]]; then
+      if [[ "$dry" == 1 ]]; then
+        printf 'would-stow'; return 0
+      fi
+      rm -- "$dst"
+    fi
+    if [[ "$dry" == 1 ]]; then
+      printf 'would-stow'
+    else
+      printf 'stowed'
+    fi
+    return 0
+  fi
+
+  if [[ -L "$dst" ]]; then
     if [[ "$dry" == 1 ]]; then
       printf 'replace'; return 0
     fi
@@ -115,12 +167,18 @@ link_one() {
     die "refusing to overwrite non-symlink: $dst"
   fi
   if [[ "$dry" == 1 ]]; then
-    printf 'would-link'; return 0
+    printf 'would-stow'
+  else
+    printf 'stowed'
   fi
-  dst_dir=$(dirname -- "$dst")
-  mkdir -p -- "$dst_dir" || die "cannot create directory: $dst_dir"
-  ln -s -- "$src" "$dst" || die "cannot create symlink: $dst"
-  printf 'linked'
+}
+
+run_stow() {
+  local stow_dir=$1 target_dir=$2 package=$3 dry=$4
+  [[ "$dry" == 1 ]] && return 0
+  mkdir -p -- "$target_dir" || die "cannot create target directory: $target_dir"
+  stow -d "$stow_dir" -t "$target_dir" "$package" >/dev/null ||
+    die "stow failed for package '$package' into $target_dir"
 }
 
 render_agents_md() {
@@ -138,8 +196,10 @@ render_agents_md() {
 }
 
 install_target() {
-  local name=$1 dry=$2 prune=$3
+  local name=$1 dry=$2 prune=$3 artifact_base=$4
   local root_raw root_expanded agents_md_name
+  local target_artifact="$artifact_base/$name"
+  prepare_target_artifact "$target_artifact" "$dry" "$name"
   root_raw=$(target_field "$name" root)
   root_expanded=$(expand_path "$root_raw")
   printf '\n%s── %s ──%s %s%s%s\n' "$C_BOLD" "$name" "$C_RESET" "$C_DIM" "$root_raw" "$C_RESET"
@@ -152,28 +212,17 @@ install_target() {
       printf '  %s!%s agents-md %s missing from repo root — skipping\n' \
         "$C_YELLOW" "$C_RESET" "$agents_md_name"
     else
-      local tmp status
-      tmp=$(mktemp)
-      render_agents_md "$src" "$tmp"
-      if [[ "$dry" == 1 ]]; then
-        if [[ -f "$dst" && ! -L "$dst" ]] && cmp -s "$tmp" "$dst"; then
-          status="ok"
-        else
-          status="would-write"
-        fi
-      else
-        mkdir -p -- "$(dirname -- "$dst")"
-        [[ -L "$dst" ]] && rm -- "$dst"
-        cp -- "$tmp" "$dst" || die "cannot write agents-md: $dst"
-        status="written"
-      fi
-      rm -f -- "$tmp"
+      local package_dir="$target_artifact/agents-md" status
+      mkdir -p -- "$package_dir" || die "cannot create artifact package: $package_dir"
+      render_agents_md "$src" "$package_dir/$agents_md_name"
+      status=$(prepare_stow_destination "$dst" "$dry" agents-md)
+      run_stow "$target_artifact" "$root_expanded" agents-md "$dry"
       printf '  %sagents-md%s %s %s(%s)%s\n' \
         "$C_GREEN" "$C_RESET" "$agents_md_name" "$C_DIM" "$status" "$C_RESET"
     fi
   fi
 
-  local kind kind_rel kind_root status entry entry_target rel keep k pdir
+  local kind kind_rel kind_root status entry entry_target rel keep k pdir package_has_items
   local p_kind p_name p_path p_origin
   local -a kept=() find_depth=()
   for kind in "${KINDS[@]}"; do
@@ -181,14 +230,20 @@ install_target() {
     [[ -z "$kind_rel" ]] && continue
     kind_root=$(target_path "$root_expanded" "$kind_rel")
     kept=()
+    package_has_items=0
     if [[ -n "$PLAN" ]]; then
       while IFS=$'\t' read -r p_kind p_name p_path p_origin; do
         [[ "$p_kind" != "$kind" ]] && continue
         kept+=("$p_name")
-        status=$(link_one "$p_path" "$kind_root/$p_name" "$dry")
+        materialize_item "$p_path" "$target_artifact/$kind/$p_name"
+        status=$(prepare_stow_destination "$kind_root/$p_name" "$dry" item)
+        package_has_items=1
         printf '  %s%-20s%s %s %s← %s (%s)%s\n' \
           "$C_CYAN" "$kind" "$C_RESET" "$p_name" "$C_DIM" "$p_origin" "$status" "$C_RESET"
       done <<< "$PLAN"
+    fi
+    if [[ "$package_has_items" == 1 ]]; then
+      run_stow "$target_artifact" "$kind_root" "$kind" "$dry"
     fi
 
     if [[ "$prune" == 1 && -d "$kind_root" ]]; then
@@ -201,7 +256,7 @@ install_target() {
       fi
       while IFS= read -r entry; do
         [[ -z "$entry" ]] && continue
-        entry_target=$(readlink "$entry" 2>/dev/null || true)
+        entry_target=$(link_target_path "$entry")
         [[ -z "$entry_target" ]] && continue
         case "$entry_target" in "$ROOT"/*) : ;; *) continue ;; esac
         rel="${entry#"$kind_root"/}"
@@ -277,12 +332,23 @@ main() {
     fi
   done
 
+  require_stow
+  local artifact_base
+  if [[ "$dry" == 1 ]]; then
+    TEMP_ARTIFACT_DIR=$(mktemp -d)
+    artifact_base=$TEMP_ARTIFACT_DIR
+    trap cleanup_temp_artifact EXIT
+  else
+    artifact_base=$STOW_ARTIFACT_DIR
+  fi
+  prepare_artifact_root "$artifact_base"
+
   build_plan
   print_plan
 
   [[ "$dry" == 1 ]] && printf '\n%s(dry run — nothing written)%s\n' "$C_DIM" "$C_RESET"
   for t in "${chosen[@]}"; do
-    install_target "$t" "$dry" "$prune"
+    install_target "$t" "$dry" "$prune" "$artifact_base"
   done
   printf '\n'
 }

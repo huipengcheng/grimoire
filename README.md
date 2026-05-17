@@ -45,7 +45,7 @@ grimoire/
     └── _grimoire-lib.sh # shared TOML/discovery helpers
 ```
 
-Requires `bash` 3.2+ and `awk` — no Python or other runtime needed.
+Requires `bash` 3.2+, `awk`, and GNU Stow — no Python or other runtime needed.
 
 ---
 
@@ -88,7 +88,7 @@ On install, the file written to each assistant is `<repo>/<target.agents_md>` + 
 - `claude` reads `~/.claude/CLAUDE.md`
 - `codex`, `opencode`, `qoder` read `AGENTS.md`
 
-Skill source directories may be nested to keep this repo organized, but the installer links each skill by its leaf directory name because Claude, Codex, and Qoder expect `skills/<skill-name>/SKILL.md`.
+Skill source directories may be nested to keep this repo organized, but the installer materializes each skill by its leaf directory name into `.grimoire-stow/` before stowing it because Claude, Codex, and Qoder expect `skills/<skill-name>/SKILL.md`.
 
 You can also drop machine-private items into `local/skills/`, `local/agents/`, etc. Same name as a shared item → `local` wins.
 

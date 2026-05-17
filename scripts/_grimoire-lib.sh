@@ -36,6 +36,44 @@ target_path() {
   esac
 }
 
+normalize_path() {
+  local path=$1 old_ifs part out=""
+  local -a parts=() normalized=()
+  old_ifs=$IFS
+  IFS='/'
+  read -r -a parts <<< "$path"
+  IFS=$old_ifs
+  for part in "${parts[@]+"${parts[@]}"}"; do
+    case "$part" in
+      ""|".") continue ;;
+      "..")
+        if [[ ${#normalized[@]} -gt 0 ]]; then
+          unset "normalized[$((${#normalized[@]} - 1))]"
+        fi
+        ;;
+      *) normalized+=("$part") ;;
+    esac
+  done
+  for part in "${normalized[@]+"${normalized[@]}"}"; do
+    out+="/$part"
+  done
+  [[ -z "$out" ]] && out="/"
+  printf '%s' "$out"
+}
+
+link_target_path() {
+  local link=$1 target base
+  target=$(readlink "$link" 2>/dev/null || true)
+  [[ -z "$target" ]] && return 0
+  case "$target" in
+    /*) normalize_path "$target" ;;
+    *)
+      base=$(cd -- "$(dirname -- "$link")" && pwd) || return 0
+      normalize_path "$base/$target"
+      ;;
+  esac
+}
+
 _var_safe() { printf '%s' "${1//[^A-Za-z0-9_]/_}"; }
 
 # ── TOML loader ────────────────────────────────────────────────────────────
