@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# grimoire-sync-mattpocock — sync vendored Matt Pocock skills.
+#
+# Usage:
+#   ./grimoire.sh sync-mattpocock [--dry-run] [--stat|--diff]
+#   ./grimoire.sh sync-mattpocock [--remote URL] [--branch BRANCH]
+
+set -euo pipefail
+# shellcheck source=_grimoire-lib.sh
+source "$(dirname -- "$0")/_grimoire-lib.sh"
+
+UPSTREAM_URL="https://github.com/mattpocock/skills.git"
+UPSTREAM_BRANCH="main"
+UPSTREAM_PREFIX="skills"
+LOCAL_PREFIX="skills/mattpocock"
+DRY_RUN=0
+DIFF_FORMAT=name-status
+
+usage() { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; }
+
+apply_local_patches() {
+  local tree_dir=$1
+  local tmp_file
+  if [[ -d "$tree_dir/in-progress/review" && ! -e "$tree_dir/in-progress/matt-review" ]]; then
+    mv -- "$tree_dir/in-progress/review" "$tree_dir/in-progress/matt-review"
+  fi
+  if [[ -f "$tree_dir/in-progress/matt-review/SKILL.md" ]]; then
+    tmp_file=$(mktemp)
+    sed 's/^name: review$/name: matt-review/' "$tree_dir/in-progress/matt-review/SKILL.md" >"$tmp_file"
+    mv -- "$tmp_file" "$tree_dir/in-progress/matt-review/SKILL.md"
+  fi
+  if [[ -f "$tree_dir/in-progress/README.md" ]]; then
+    tmp_file=$(mktemp)
+    sed \
+      -e 's/\*\*\[review\](\.\/review\/SKILL\.md)\*\*/**[matt-review](.\/matt-review\/SKILL.md)**/' \
+      -e 's#](./review/SKILL.md)#](./matt-review/SKILL.md)#' \
+      "$tree_dir/in-progress/README.md" >"$tmp_file"
+    mv -- "$tmp_file" "$tree_dir/in-progress/README.md"
+  fi
+}
+
+archive_split_commit() {
+  local split_commit=$1 tree_dir=$2
+  git archive "$split_commit" | tar -x -C "$tree_dir"
+  apply_local_patches "$tree_dir"
+}
+
+create_tree_from_dir() {
+  local tree_dir=$1
+  local index_file tree
+  index_file=$(mktemp)
+  GIT_INDEX_FILE=$index_file git read-tree --empty
+  (
+    cd "$tree_dir"
+    GIT_INDEX_FILE=$index_file git --git-dir="$ROOT/.git" --work-tree="$tree_dir" add -A .
+  )
+  tree=$(GIT_INDEX_FILE=$index_file git write-tree)
+  rm -f -- "$index_file"
+  printf '%s' "$tree"
+}
+
+create_patched_commit() {
+  local split_commit=$1 patched_tree=$2
+  git commit-tree "$patched_tree" -p "$split_commit" -m "Apply grimoire mattpocock sync patches"
+}
+
+subtree_initialized() {
+  [[ -n "$(git log --grep="git-subtree-dir: $LOCAL_PREFIX" --format=%H -n 1)" ]]
+}
+
+latest_subtree_split() {
+  git log --grep="^git-subtree-dir: $LOCAL_PREFIX/*$" --format=%B -n 1 |
+    awk '$1 == "git-subtree-split:" { print $2; exit }'
+}
+
+ensure_subtree_initialized() {
+  local local_split
+  if subtree_initialized; then
+    return 0
+  fi
+  printf 'Initializing subtree metadata for %s...\n' "$LOCAL_PREFIX"
+  local_split=$(git subtree split --prefix="$LOCAL_PREFIX" --quiet)
+  git commit --allow-empty \
+    -m "chore(skills): initialize mattpocock subtree" \
+    -m "git-subtree-dir: $LOCAL_PREFIX" \
+    -m "git-subtree-split: $local_split" >/dev/null
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    --stat)
+      DRY_RUN=1
+      DIFF_FORMAT=stat
+      shift
+      ;;
+    --diff)
+      DRY_RUN=1
+      DIFF_FORMAT=patch
+      shift
+      ;;
+    --remote)
+      [[ $# -ge 2 ]] || die "--remote requires a URL"
+      UPSTREAM_URL=$2
+      shift 2
+      ;;
+    --branch)
+      [[ $# -ge 2 ]] || die "--branch requires a branch name"
+      UPSTREAM_BRANCH=$2
+      shift 2
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+done
+
+command -v git >/dev/null 2>&1 || die "git is required"
+git -C "$ROOT" subtree --help >/dev/null 2>&1 || die "git subtree is required"
+command -v tar >/dev/null 2>&1 || die "tar is required"
+
+cd "$ROOT"
+
+if [[ "$DRY_RUN" == 0 && -n "$(git status --porcelain)" ]]; then
+  die "worktree is not clean; commit or stash local changes before syncing"
+fi
+
+printf 'Fetching %s %s...\n' "$UPSTREAM_URL" "$UPSTREAM_BRANCH"
+git fetch --no-tags "$UPSTREAM_URL" "$UPSTREAM_BRANCH"
+
+printf 'Splitting upstream %s/ directory...\n' "$UPSTREAM_PREFIX"
+split_commit=$(git subtree split --quiet --prefix="$UPSTREAM_PREFIX" FETCH_HEAD)
+
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+archive_split_commit "$split_commit" "$tmp_dir"
+
+if [[ "$DRY_RUN" == 1 ]]; then
+  diff_output=$(mktemp)
+  compare_dir=$(mktemp -d)
+  trap 'rm -rf "$tmp_dir" "$diff_output" "$compare_dir"' EXIT
+  mkdir -p -- "$compare_dir/current" "$compare_dir/upstream"
+  cp -R -- "$LOCAL_PREFIX"/. "$compare_dir/current"/
+  cp -R -- "$tmp_dir"/. "$compare_dir/upstream"/
+  case "$DIFF_FORMAT" in
+    name-status)
+      printf '\nChanged paths from current %s to upstream %s:\n' "$LOCAL_PREFIX" "$split_commit"
+      diff_args=(--name-status)
+      ;;
+    stat)
+      printf '\nDiff stat from current %s to upstream %s:\n' "$LOCAL_PREFIX" "$split_commit"
+      diff_args=(--stat)
+      ;;
+    patch)
+      printf '\nDiff from current %s to upstream %s:\n' "$LOCAL_PREFIX" "$split_commit"
+      diff_args=()
+      ;;
+  esac
+  diff_status=0
+  (
+    cd "$compare_dir"
+    git diff --no-index --no-renames "${diff_args[@]}" current upstream >"$diff_output"
+  ) || diff_status=$?
+  if [[ -s "$diff_output" ]]; then
+    sed -e 's#1/current#current#g' -e 's#2/upstream#upstream#g' "$diff_output"
+  else
+    printf 'No changed paths.\n'
+  fi
+  if [[ "$diff_status" != 0 && "$diff_status" != 1 ]]; then
+    exit "$diff_status"
+  fi
+  exit 0
+fi
+
+ensure_subtree_initialized
+patched_tree=$(create_tree_from_dir "$tmp_dir")
+latest_split=$(latest_subtree_split)
+if [[ -n "$latest_split" ]]; then
+  latest_tree=$(git rev-parse "$latest_split^{tree}")
+  if [[ "$latest_tree" == "$patched_tree" ]]; then
+    printf 'No upstream changes; merge skipped.\n'
+    exit 0
+  fi
+fi
+patched_commit=$(create_patched_commit "$split_commit" "$patched_tree")
+
+printf 'Merging upstream split into %s...\n' "$LOCAL_PREFIX"
+git subtree merge \
+  --prefix="$LOCAL_PREFIX" \
+  --squash \
+  --message="chore(skills): sync mattpocock skills" \
+  "$patched_commit"

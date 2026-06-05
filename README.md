@@ -130,6 +130,31 @@ Reports: missing local config, name collisions between self and local, broken sy
 
 ---
 
+## Syncing Matt Pocock Skills
+
+`skills/mattpocock` vendors the `skills/` directory from
+`https://github.com/mattpocock/skills`. Sync it with:
+
+```bash
+./grimoire.sh sync-mattpocock
+```
+
+Preview before syncing:
+
+```bash
+./grimoire.sh sync-mattpocock --dry-run  # changed paths
+./grimoire.sh sync-mattpocock --stat     # diff stat
+./grimoire.sh sync-mattpocock --diff     # full patch
+```
+
+The sync uses `git subtree` with a squash merge, so clones of this repo do not
+need submodule setup. Commit or stash local changes before running it; subtree
+merges require a clean worktree. The script preserves the local
+`in-progress/review` to `in-progress/matt-review` rename before comparing or
+merging upstream.
+
+---
+
 ## Philosophy
 
 Most people configure tools. This grimoire *shapes* tools — nudging them toward a particular aesthetic, a particular way of reasoning, a particular voice.
