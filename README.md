@@ -30,12 +30,16 @@ grimoire/
 ├── skills/              # source may be nested; each leaf SKILL.md is one skill
 ├── agents/   commands/  # flat: each .md file is one item
 │
+├── claude/   codex/  …  # per-target items: a dir named after a target
+│   └── skills/ …        #   installs ONLY to that target
+│
 ├── registry.toml        # assistant → install paths
 ├── examples/local/      # copy-once templates for local/
 │
 ├── local/               # per-machine overrides (gitignored)
 │   ├── config.toml      #   targets selection, disabled list
-│   ├── AGENTS.md        #   appended to AGENTS.md/CLAUDE.md on install
+│   ├── AGENTS.md        #   appended to AGENTS.md targets (codex/opencode/qoder)
+│   ├── CLAUDE.md        #   appended to CLAUDE.md target (claude)
 │   └── skills/ …        #   private items
 │
 ├── grimoire.sh          # entry point: dispatches `install`, `doctor`, …
@@ -91,14 +95,34 @@ This machine is the work laptop. Default repo root is ~/code/...
 
 `AGENTS.md` and `CLAUDE.md` are separate base instruction files. They start from the same house style, but can diverge where Claude Code and AGENTS.md-reading tools need different guidance.
 
-On install, the file written to each assistant is `<repo>/<target.agents_md>` + `local/AGENTS.md`. Per assistant docs, the destination filename differs:
+On install, the file written to each assistant is `<repo>/<target.agents_md>` + `local/<target.agents_md>` — the local overlay mirrors the target's filename. Per assistant docs, the destination filename differs:
 
-- `claude` reads `~/.claude/CLAUDE.md`
-- `codex`, `opencode`, `qoder` read `AGENTS.md`
+- `claude` reads `~/.claude/CLAUDE.md`, with local overrides from `local/CLAUDE.md`
+- `codex`, `opencode`, `qoder` read `AGENTS.md`, with local overrides from `local/AGENTS.md`
 
 Skill source directories may be nested to keep this repo organized, but the installer materializes each skill by its leaf directory name into `.grimoire-stow/` before stowing it because Claude, Codex, and Qoder expect `skills/<skill-name>/SKILL.md`.
 
 You can also drop machine-private items into `local/skills/`, `local/agents/`, etc. Same name as a shared item → `local` wins.
+
+---
+
+## Target-Specific Items
+
+By default every skill, agent, and command installs to every target. To scope an item to one assistant, put it in a folder named after that target (the `registry.toml` key):
+
+```
+skills/my-skill/          # global — installs everywhere
+claude/skills/my-skill/   # installs ONLY to claude
+codex/agents/reviewer.md  # installs ONLY to codex
+```
+
+The same works per-machine under `local/`:
+
+```
+local/claude/skills/…     # claude-only, this machine
+```
+
+Precedence, most specific wins: `local/<target>/<kind>` › `<target>/<kind>` › `local/<kind>` › `<kind>`. A target-scoped item with the same name as a global one overrides it for that target only.
 
 ---
 
