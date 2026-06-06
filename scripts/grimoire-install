@@ -181,17 +181,52 @@ run_stow() {
 }
 
 render_agents_md() {
-  # Concatenate $1 (source) + AGENTS_LOCAL (if present) into $2 (output).
+  # Concatenate $1 (source) + the local overlay $3 (if present) into $2 (output).
+  # The local overlay mirrors the target's agents_md filename, so `claude` picks
+  # up local/CLAUDE.md while `codex` picks up local/AGENTS.md.
   # Ensures a "\n\n" separator unless the base already ends with one.
-  local src=$1 out=$2 last
+  local src=$1 out=$2 local_overlay=$3 last
   : > "$out"
   [[ -f "$src" ]] && cat -- "$src" >> "$out"
-  if [[ -f "$AGENTS_LOCAL" ]]; then
+  if [[ -f "$local_overlay" ]]; then
     last=$(tail -c 2 -- "$out" 2>/dev/null; printf X)
     last="${last%X}"
     [[ "$last" != $'\n\n' ]] && printf '\n\n' >> "$out"
-    cat -- "$AGENTS_LOCAL" >> "$out"
+    cat -- "$local_overlay" >> "$out"
   fi
+}
+
+# Effective items of $kind for target $2, merging the global PLAN with the
+# target's own scoped dirs: <root>/<target>/<kind> (self) and
+# local/<target>/<kind> (local). Prints "name<TAB>path<TAB>origin" sorted by
+# name; scoped sources override global entries (and each other, local last) on
+# name collision.
+target_kind_items() {
+  local kind=$1 target=$2
+  local -a names=() paths=() origins=()
+  local p_kind p_name p_path p_origin
+  local spec origin dir name path idx i
+
+  while IFS=$'\t' read -r p_kind p_name p_path p_origin; do
+    [[ "$p_kind" != "$kind" ]] && continue
+    names+=("$p_name"); paths+=("$p_path"); origins+=("$p_origin")
+  done <<< "$PLAN"
+
+  for spec in "self:$ROOT/$target/$kind" "local:$LOCAL_DIR/$target/$kind"; do
+    origin="${spec%%:*}"; dir="${spec#*:}"
+    while IFS=$'\t' read -r name path; do
+      [[ -z "$name" ]] && continue
+      if idx=$(array_index "$name" "${names[@]+"${names[@]}"}"); then
+        paths[$idx]=$path; origins[$idx]="$target/$origin"
+      else
+        names+=("$name"); paths+=("$path"); origins+=("$target/$origin")
+      fi
+    done < <(discover "$kind" "$dir")
+  done
+
+  for ((i = 0; i < ${#names[@]}; i++)); do
+    printf '%s\t%s\t%s\n' "${names[$i]}" "${paths[$i]}" "${origins[$i]}"
+  done | LC_ALL=C sort -t $'\t' -k1,1
 }
 
 install_target() {
@@ -213,7 +248,7 @@ install_target() {
     else
       local package_dir="$target_artifact/agents-md" status
       mkdir -p -- "$package_dir" || die "cannot create artifact package: $package_dir"
-      render_agents_md "$src" "$package_dir/$agents_md_name"
+      render_agents_md "$src" "$package_dir/$agents_md_name" "$LOCAL_DIR/$agents_md_name"
       status=$(prepare_stow_destination "$dst" "$dry" agents-md)
       run_stow "$target_artifact" "$root_expanded" agents-md "$dry"
       printf '  %sagents-md%s %s %s(%s)%s\n' \
@@ -222,7 +257,7 @@ install_target() {
   fi
 
   local kind kind_rel kind_root status entry entry_target rel keep k pdir package_has_items
-  local p_kind p_name p_path p_origin
+  local p_name p_path p_origin
   local -a kept=() find_depth=()
   for kind in "${KINDS[@]}"; do
     kind_rel=$(target_field "$name" "$kind")
@@ -230,17 +265,15 @@ install_target() {
     kind_root=$(target_path "$root_expanded" "$kind_rel")
     kept=()
     package_has_items=0
-    if [[ -n "$PLAN" ]]; then
-      while IFS=$'\t' read -r p_kind p_name p_path p_origin; do
-        [[ "$p_kind" != "$kind" ]] && continue
-        kept+=("$p_name")
-        materialize_item "$p_path" "$target_artifact/$kind/$p_name"
-        status=$(prepare_stow_destination "$kind_root/$p_name" "$dry" item)
-        package_has_items=1
-        printf '  %s%-20s%s %s %s← %s (%s)%s\n' \
-          "$C_CYAN" "$kind" "$C_RESET" "$p_name" "$C_DIM" "$p_origin" "$status" "$C_RESET"
-      done <<< "$PLAN"
-    fi
+    while IFS=$'\t' read -r p_name p_path p_origin; do
+      [[ -z "$p_name" ]] && continue
+      kept+=("$p_name")
+      materialize_item "$p_path" "$target_artifact/$kind/$p_name"
+      status=$(prepare_stow_destination "$kind_root/$p_name" "$dry" item)
+      package_has_items=1
+      printf '  %s%-20s%s %s %s← %s (%s)%s\n' \
+        "$C_CYAN" "$kind" "$C_RESET" "$p_name" "$C_DIM" "$p_origin" "$status" "$C_RESET"
+    done < <(target_kind_items "$kind" "$name")
     if [[ "$package_has_items" == 1 ]]; then
       run_stow "$target_artifact" "$kind_root" "$kind" "$dry"
     fi

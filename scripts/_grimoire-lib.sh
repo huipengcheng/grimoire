@@ -1,11 +1,10 @@
 # Shared helpers for grimoire-install / grimoire-doctor. Sourced, not executable.
-# Defines: ROOT, LOCAL_DIR, AGENTS_LOCAL, REGISTRY_FILE, LOCAL_CONFIG,
+# Defines: ROOT, LOCAL_DIR, REGISTRY_FILE, LOCAL_CONFIG,
 # STOW_ARTIFACT_DIR, KINDS, C_* (ANSI colors), TARGET_NAMES, and the helpers below.
 
 _GRIMOIRE_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd -- "$_GRIMOIRE_LIB_DIR/.." && pwd)"
 LOCAL_DIR="$ROOT/local"
-AGENTS_LOCAL="$LOCAL_DIR/AGENTS.md"
 REGISTRY_FILE="$ROOT/registry.toml"
 LOCAL_CONFIG="$LOCAL_DIR/config.toml"
 STOW_ARTIFACT_DIR="$ROOT/.grimoire-stow"
