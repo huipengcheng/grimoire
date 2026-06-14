@@ -1,12 +1,14 @@
-# Shared helpers for grimoire-install / grimoire-doctor. Sourced, not executable.
-# Defines: ROOT, LOCAL_DIR, REGISTRY_FILE, LOCAL_CONFIG,
-# STOW_ARTIFACT_DIR, KINDS, C_* (ANSI colors), TARGET_NAMES, and the helpers below.
+# Shared helpers for the grimoire-* commands. Sourced, not executable.
+# Defines: ROOT, LOCAL_DIR, REGISTRY_FILE, LOCAL_CONFIG, VENDOR_FILE,
+# STOW_ARTIFACT_DIR, KINDS, C_* (ANSI colors), TARGET_NAMES, SOURCE_NAMES, and
+# the helpers below.
 
 _GRIMOIRE_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd -- "$_GRIMOIRE_LIB_DIR/.." && pwd)"
 LOCAL_DIR="$ROOT/local"
 REGISTRY_FILE="$ROOT/registry.toml"
 LOCAL_CONFIG="$LOCAL_DIR/config.toml"
+VENDOR_FILE="$ROOT/vendor.toml"
 STOW_ARTIFACT_DIR="$ROOT/.grimoire-stow"
 
 KINDS=(skills agents commands)
@@ -77,7 +79,8 @@ link_target_path() {
 _var_safe() { printf '%s' "${1//[^A-Za-z0-9_]/_}"; }
 
 # ── TOML loader ────────────────────────────────────────────────────────────
-# Minimal parser; supports the shape used by registry.toml and config.toml:
+# Minimal parser; supports the shape used by registry.toml, config.toml, and
+# vendor.toml:
 #   - `[section]` headers
 #   - `key = "value"` string assignments
 #   - `key = [ "s1", "s2", ... ]` string arrays (inline or multi-line)
@@ -120,6 +123,47 @@ target_exists() {
   return 1
 }
 
+# Vendor sources from vendor.toml. Same shape as targets: each `[section]` is a
+# source name, scalar `key = "value"` becomes SOURCE_<safe>_<key>. Array keys
+# (exclude, rename) are read per-section via load_string_array's section arg.
+declare -a SOURCE_NAMES=()
+
+load_sources_toml() {
+  local file=$1 line key val cur="" safe
+  SOURCE_NAMES=()
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+    if [[ "$line" =~ ^\[([^]]+)\][[:space:]]*$ ]]; then
+      cur="${BASH_REMATCH[1]}"
+      SOURCE_NAMES+=("$cur")
+      continue
+    fi
+    [[ -z "$cur" ]] && continue
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*\"([^\"]*)\" ]]; then
+      key="${BASH_REMATCH[1]}"
+      val="${BASH_REMATCH[2]}"
+      safe=$(_var_safe "$cur")
+      printf -v "SOURCE_${safe}_${key}" '%s' "$val"
+    fi
+  done < "$file"
+}
+
+source_field() {
+  local var="SOURCE_$(_var_safe "$1")_$2"
+  printf '%s' "${!var-}"
+}
+
+source_exists() {
+  local n=$1 s
+  for s in "${SOURCE_NAMES[@]+"${SOURCE_NAMES[@]}"}"; do
+    [[ "$s" == "$n" ]] && return 0
+  done
+  return 1
+}
+
 array_index() {
   local needle=$1 item i=0
   shift
@@ -133,10 +177,13 @@ array_index() {
   return 1
 }
 
+# load_string_array <file> <key> [section] — print one array element per line.
+# With a section, only the `key = [...]` inside that `[section]` is read; without
+# one, the first matching key anywhere (incl. top-level) is read, as before.
 load_string_array() {
-  local file=$1 key=$2
+  local file=$1 key=$2 section=${3-}
   [[ -f "$file" ]] || return 0
-  awk -v k="$key" '
+  awk -v k="$key" -v sect="$section" '
     function strip_comment(s,   i, in_str, c) {
       in_str = 0
       for (i = 1; i <= length(s); i++) {
@@ -146,10 +193,17 @@ load_string_array() {
       }
       return s
     }
-    BEGIN { in_arr = 0 }
+    BEGIN { in_arr = 0; cur = "" }
     {
       line = $0
       if (!in_arr) {
+        if (match(line, /^[[:space:]]*\[[^]]+\][[:space:]]*$/)) {
+          cur = line
+          sub(/^[[:space:]]*\[/, "", cur)
+          sub(/\][[:space:]]*$/, "", cur)
+          next
+        }
+        if (sect != "" && cur != sect) next
         re = "^[[:space:]]*" k "[[:space:]]*=[[:space:]]*\\["
         if (match(line, re)) {
           in_arr = 1
