@@ -1,82 +1,120 @@
 # AGENTS.md
 
-## Guideline
+## Project Overview
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+This repository is a portable "grimoire" for AI assistant configuration. It
+stores shared base instructions, skills, agents, and slash commands, then
+installs them into assistant-specific config directories through GNU Stow.
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+Important paths:
 
-### 1. Think Before Coding
+- `AGENTS.md`: base instructions for AGENTS.md-reading tools such as Codex,
+  OpenCode, and Qoder.
+- `CLAUDE.md`: Claude-specific base instructions. Keep it separate unless the
+  user explicitly asks for parity.
+- `skills/`: shared skills. Skill source directories may be nested, but each
+  installed skill is keyed by the leaf directory containing `SKILL.md`.
+- `agents/` and `commands/`: flat shared item directories; each non-hidden file
+  or directory is one installable item.
+- `registry.toml`: assistant target definitions and destination paths.
+- `vendor.toml`: external skill sources synced with `git subtree`.
+- `local/`: per-machine overrides and private items. Treat this as local state;
+  do not edit it unless the user asks.
+- `.grimoire-stow/`: generated install artifacts. Do not edit directly.
+- `scripts/`: Bash implementation for `install`, `uninstall`, `doctor`, and
+  `sync`, dispatched by `./grimoire.sh`.
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+## Working Rules
 
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+State assumptions before changing behavior. If the request has multiple
+reasonable interpretations, name them and ask or choose the smallest reversible
+change.
 
-### 2. Simplicity First
+Keep changes surgical. Touch only files needed for the request, match existing
+style, and avoid speculative abstractions or unrelated cleanup. If you notice
+unrelated dead code or drift, mention it instead of fixing it.
 
-**Minimum code that solves the problem. Nothing speculative.**
+Prefer simple shell and TOML changes over new dependencies. The project is
+designed around Bash 3.2+, `awk`, `git`, `tar`, and GNU Stow; do not introduce
+Python, Node, or another runtime for normal operation unless explicitly asked.
 
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
+When editing scripts, preserve the current defensive style: `set -euo pipefail`,
+small helpers, explicit refusal before overwriting non-owned files, and dry-run
+support where the command already has it.
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+Write new code, comments, identifiers, commit messages, and developer-facing
+documentation in English. Preserve existing non-English user-facing text,
+fixtures, and translations unless the task asks to change them.
 
-### 3. Surgical Changes
+## Install Model
 
-**Touch only what you must. Clean up only your own mess.**
+The installer resolves items by kind from two layers:
 
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
+1. `self`: repository directories such as `skills/`, `agents/`, and `commands/`.
+2. `local`: matching directories under `local/`.
 
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
+`local` wins on same-name items. `local/config.toml` can disable any item by
+fully-qualified name such as `skills/tdd` or `agents/eval-executor`.
 
-The test: Every changed line should trace directly to the user's request.
+For `AGENTS.md` and `CLAUDE.md`, install renders the root file plus the matching
+local overlay (`local/AGENTS.md` or `local/CLAUDE.md`) into `.grimoire-stow/`
+before stowing it into the target root.
 
-### 4. Goal-Driven Execution
+When adding a target, update `registry.toml`; avoid script changes unless the
+new assistant needs a genuinely new install model.
 
-**Define success criteria. Loop until verified.**
+When adding or moving a skill, ensure the skill directory contains `SKILL.md`.
+Avoid duplicate skill leaf names, even in different category folders, because
+installed skill names are flattened to their leaf directory names.
 
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
+## Common Commands
 
-For multi-step tasks, state a brief plan:
+- `./grimoire.sh doctor`: check local config, skill markers, name conflicts, and
+  broken symlinks.
+- `./grimoire.sh install --dry-run`: preview install for targets in
+  `local/config.toml`.
+- `./grimoire.sh install <target> --dry-run`: preview one target.
+- `./grimoire.sh uninstall <target> --dry-run`: preview removal for one target.
+- `./grimoire.sh sync --dry-run`: preview vendored skill updates.
+- `./grimoire.sh sync --stat` or `./grimoire.sh sync --diff`: inspect vendored
+  changes before applying them.
+
+Use dry-run commands before real install, uninstall, or sync changes when the
+request touches deployment behavior.
+
+## Verification
+
+For documentation-only changes, inspect the diff and run no heavier checks
+unless the edited documentation describes generated behavior.
+
+For changes to discovery, resolution, install, uninstall, or target metadata,
+run:
+
+```bash
+./grimoire.sh doctor
+./grimoire.sh install --dry-run
 ```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
+
+For vendoring changes, prefer previewing first:
+
+```bash
+./grimoire.sh sync --dry-run
 ```
 
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
----
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-
-
-
-## Code Style
-
-- Write new code, comments, identifiers, commit messages, and developer-facing documentation in English.
-- Preserve existing non-English user-facing text, fixtures, and translations unless the task asks to change them.
+Real `sync` uses network access and requires a clean worktree because it performs
+`git subtree` operations. Do not run it casually.
 
 ## Git Workflow
 
-- When creating commits, use Conventional Commits:
-  `<type>(<scope>): <description>`.
-- Allowed types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`.
-- Add a commit body when it materially explains rationale, impact, migration notes, or test coverage.
-- Do not include assistant/vendor metadata in commit messages.
+The worktree may contain user changes. Never revert changes you did not make.
+If unrelated files are dirty, leave them alone.
+
+When creating commits, use Conventional Commits:
+`<type>(<scope>): <description>`.
+
+Allowed types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, and
+`ci`.
+
+Add a commit body only when it materially explains rationale, impact, migration
+notes, or test coverage. Do not include assistant or vendor metadata in commit
+messages.
