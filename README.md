@@ -146,7 +146,7 @@ url     = "https://github.com/mattpocock/skills.git"
 branch  = "main"
 subdir  = "skills"
 dest    = "skills/mattpocock"
-exclude = []                       # paths under subdir to drop after fetch
+exclude = ["scaffold-exercises"]   # drop skills by leaf name (or a path)
 rename  = ["review:matt-review"]   # rename a leaf skill (and its SKILL.md name:)
 ```
 

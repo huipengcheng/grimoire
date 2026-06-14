@@ -22,13 +22,22 @@ cleanup() { [[ -n "$TMP_ROOT" ]] && rm -rf -- "$TMP_ROOT"; }
 usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Apply a source's exclude/rename rules to a freshly extracted upstream tree.
-# rename renames a leaf skill dir and rewrites its SKILL.md `name:` to match, so
-# the installed skill (keyed on the leaf dir name) and its frontmatter agree.
+# exclude drops a skill by leaf name (or an explicit "<dir>/..." path under the
+# subdir). rename renames a leaf skill dir and rewrites its SKILL.md `name:` to
+# match, so the installed skill (keyed on the leaf dir name) and its frontmatter
+# agree.
 apply_source_rules() {
   local tree_dir=$1 name=$2 item pair old new dir parent skill_md tmp
   while IFS= read -r item; do
     [[ -z "$item" ]] && continue
-    rm -rf -- "$tree_dir/$item"
+    case "$item" in
+      */*) rm -rf -- "$tree_dir/$item" ;;  # explicit path under the subdir
+      *)                                    # bare skill name: drop its leaf dir
+        while IFS= read -r dir; do
+          [[ -z "$dir" ]] && continue
+          rm -rf -- "$dir"
+        done < <(find "$tree_dir" -type d -name "$item" 2>/dev/null) ;;
+    esac
   done < <(load_string_array "$VENDOR_FILE" exclude "$name")
   while IFS= read -r pair; do
     [[ -z "$pair" ]] && continue

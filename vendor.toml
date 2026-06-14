@@ -2,8 +2,9 @@
 #
 # Each [<name>] is one source. `subdir` is the upstream prefix pulled; `dest` is
 # where it lands in this repo — keep it under skills/ so discovery picks it up.
-# `exclude` drops paths (relative to subdir) after fetch. `rename` renames a leaf
-# skill directory and rewrites its SKILL.md `name:` to match, as "<old>:<new>";
+# `exclude` drops a skill by leaf name (or an explicit path under subdir) after
+# fetch. `rename` renames a leaf skill directory and rewrites its SKILL.md
+# `name:` to match, as "<old>:<new>";
 # this is the fork-by-rename escape when an upstream skill name would collide.
 #
 # Sync with: ./grimoire.sh sync [name] [--dry-run|--stat|--diff]
@@ -13,5 +14,5 @@ url     = "https://github.com/mattpocock/skills.git"
 branch  = "main"
 subdir  = "skills"
 dest    = "skills/mattpocock"
-exclude = []
+exclude = ["grill-me", "migrate-to-shoehorn", "scaffold-exercises"]
 rename  = ["review:matt-review"]
