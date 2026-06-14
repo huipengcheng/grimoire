@@ -30,10 +30,8 @@ grimoire/
 ├── skills/              # source may be nested; each leaf SKILL.md is one skill
 ├── agents/   commands/  # flat: each .md file is one item
 │
-├── claude/   codex/  …  # per-target items: a dir named after a target
-│   └── skills/ …        #   installs ONLY to that target
-│
 ├── registry.toml        # assistant → install paths
+├── vendor.toml          # external skill sources (git subtree)
 ├── examples/local/      # copy-once templates for local/
 │
 ├── local/               # per-machine overrides (gitignored)
@@ -46,6 +44,7 @@ grimoire/
 └── scripts/
     ├── grimoire-install # install logic
     ├── grimoire-doctor  # diagnose conflicts and orphans
+    ├── grimoire-sync    # vendor.toml → git subtree sync
     └── _grimoire-lib.sh # shared TOML/discovery helpers
 ```
 
@@ -83,7 +82,7 @@ $EDITOR local/config.toml          # set targets = ["claude", ...]
 # local/config.toml
 targets  = ["claude", "codex"]      # this machine installs to these
 disabled = [
-  "self/agents/eval-executor",      # turn off one of your own items
+  "agents/eval-executor",           # turn off one item, by kind/name
 ]
 ```
 
@@ -103,26 +102,6 @@ On install, the file written to each assistant is `<repo>/<target.agents_md>` + 
 Skill source directories may be nested to keep this repo organized, but the installer materializes each skill by its leaf directory name into `.grimoire-stow/` before stowing it because Claude, Codex, and Qoder expect `skills/<skill-name>/SKILL.md`.
 
 You can also drop machine-private items into `local/skills/`, `local/agents/`, etc. Same name as a shared item → `local` wins.
-
----
-
-## Target-Specific Items
-
-By default every skill, agent, and command installs to every target. To scope an item to one assistant, put it in a folder named after that target (the `registry.toml` key):
-
-```
-skills/my-skill/          # global — installs everywhere
-claude/skills/my-skill/   # installs ONLY to claude
-codex/agents/reviewer.md  # installs ONLY to codex
-```
-
-The same works per-machine under `local/`:
-
-```
-local/claude/skills/…     # claude-only, this machine
-```
-
-Precedence, most specific wins: `local/<target>/<kind>` › `<target>/<kind>` › `local/<kind>` › `<kind>`. A target-scoped item with the same name as a global one overrides it for that target only.
 
 ---
 
@@ -154,28 +133,38 @@ Reports: missing local config, name collisions between self and local, broken sy
 
 ---
 
-## Syncing Matt Pocock Skills
+## Vendoring Skills
 
-`skills/mattpocock` vendors the `skills/` directory from
-`https://github.com/mattpocock/skills`. Sync it with:
+External skill sources live in `vendor.toml`. Each `[<name>]` block is one
+source — an upstream repo, the `subdir` to pull, and the `dest` it lands in
+(kept under `skills/` so it installs like any other skill):
 
-```bash
-./grimoire.sh sync-mattpocock
+```toml
+# vendor.toml
+[mattpocock]
+url     = "https://github.com/mattpocock/skills.git"
+branch  = "main"
+subdir  = "skills"
+dest    = "skills/mattpocock"
+exclude = ["scaffold-exercises"]   # drop skills by leaf name (or a path)
+rename  = ["review:matt-review"]   # rename a leaf skill (and its SKILL.md name:)
 ```
 
-Preview before syncing:
+Sync every source, or one by name:
 
 ```bash
-./grimoire.sh sync-mattpocock --dry-run  # changed paths
-./grimoire.sh sync-mattpocock --stat     # diff stat
-./grimoire.sh sync-mattpocock --diff     # full patch
+./grimoire.sh sync                 # all sources
+./grimoire.sh sync mattpocock      # one source
+./grimoire.sh sync --dry-run       # changed paths, no writes
+./grimoire.sh sync --stat          # diff stat
+./grimoire.sh sync --diff          # full patch
 ```
 
-The sync uses `git subtree` with a squash merge, so clones of this repo do not
-need submodule setup. Commit or stash local changes before running it; subtree
-merges require a clean worktree. The script preserves the local
-`in-progress/review` to `in-progress/matt-review` rename before comparing or
-merging upstream.
+Sync uses `git subtree` with a squash merge, so clones of this repo need no
+submodule setup. Commit or stash local changes first; subtree merges require a
+clean worktree. `rename` is the fork-by-rename escape for when an upstream skill
+name would collide with one of yours — grimoire never silently overrides on a
+name clash, so renaming (or `exclude`) is how you resolve it.
 
 ---
 

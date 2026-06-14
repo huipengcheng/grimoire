@@ -6,9 +6,10 @@
 # Which assistants to install on this machine. Must be keys in registry.toml.
 targets = ["claude"]
 
-# Disable items by fully-qualified name: "<origin>/<kind>/<name>".
-# Origins: "self" (grimoire's own) or "local" (this machine).
+# Disable items by fully-qualified name: "<kind>/<name>".
+# Drops the item from every layer — grimoire's own (incl. vendored skills) and
+# this machine's local/ overrides alike.
 disabled = [
-  # "self/agents/eval-executor",
-  # "self/skills/tdd",
+  # "skills/tdd",               # any item by kind/name, incl. vendored skills
+  # "agents/eval-executor",
 ]

@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# grimoire-sync — sync vendored skill sources declared in vendor.toml.
+#
+# Usage:
+#   ./grimoire.sh sync                 Sync every source in vendor.toml.
+#   ./grimoire.sh sync mattpocock      Sync one source by name.
+#   ./grimoire.sh sync --dry-run       Preview changed paths (all sources).
+#   ./grimoire.sh sync --stat          Preview as a diff stat.
+#   ./grimoire.sh sync --diff          Preview as a full patch.
+#
+# Each source is fetched and squash-merged with git subtree, so clones of this
+# repo need no submodule setup. Commit or stash local changes before a real
+# sync; subtree merges require a clean worktree.
+
+set -euo pipefail
+# shellcheck source=_grimoire-lib.sh
+source "$(dirname -- "$0")/_grimoire-lib.sh"
+
+TMP_ROOT=""
+cleanup() { [[ -n "$TMP_ROOT" ]] && rm -rf -- "$TMP_ROOT"; }
+
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# Apply a source's exclude/rename rules to a freshly extracted upstream tree.
+# exclude drops a skill by leaf name (or an explicit "<dir>/..." path under the
+# subdir). rename renames a leaf skill dir and rewrites its SKILL.md `name:` to
+# match, so the installed skill (keyed on the leaf dir name) and its frontmatter
+# agree.
+apply_source_rules() {
+  local tree_dir=$1 name=$2 item pair old new dir parent skill_md tmp
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    case "$item" in
+      */*) rm -rf -- "$tree_dir/$item" ;;  # explicit path under the subdir
+      *)                                    # bare skill name: drop its leaf dir
+        while IFS= read -r dir; do
+          [[ -z "$dir" ]] && continue
+          rm -rf -- "$dir"
+        done < <(find "$tree_dir" -type d -name "$item" 2>/dev/null) ;;
+    esac
+  done < <(load_string_array "$VENDOR_FILE" exclude "$name")
+  while IFS= read -r pair; do
+    [[ -z "$pair" ]] && continue
+    old=${pair%%:*}
+    new=${pair##*:}
+    [[ -n "$old" && -n "$new" && "$old" != "$pair" ]] ||
+      die "source $name: bad rename rule (want \"old:new\"): $pair"
+    dir=$(find "$tree_dir" -type d -name "$old" 2>/dev/null | LC_ALL=C sort | head -n1)
+    [[ -z "$dir" ]] && continue  # absent or already renamed upstream
+    parent=$(dirname -- "$dir")
+    [[ -e "$parent/$new" ]] && die "source $name: rename target exists: $new"
+    mv -- "$dir" "$parent/$new"
+    skill_md="$parent/$new/SKILL.md"
+    if [[ -f "$skill_md" ]]; then
+      tmp=$(mktemp)
+      sed "s|^name: ${old}\$|name: ${new}|" "$skill_md" >"$tmp"
+      mv -- "$tmp" "$skill_md"
+    fi
+  done < <(load_string_array "$VENDOR_FILE" rename "$name")
+}
+
+create_tree_from_dir() {
+  local tree_dir=$1 index_file tree
+  index_file=$(mktemp)
+  GIT_INDEX_FILE=$index_file git read-tree --empty
+  (
+    cd "$tree_dir"
+    GIT_INDEX_FILE=$index_file git --git-dir="$ROOT/.git" --work-tree="$tree_dir" add -A .
+  )
+  tree=$(GIT_INDEX_FILE=$index_file git write-tree)
+  rm -f -- "$index_file"
+  printf '%s' "$tree"
+}
+
+subtree_initialized() {
+  local dest=$1
+  [[ -n "$(git log --grep="git-subtree-dir: $dest" --format=%H -n 1)" ]]
+}
+
+latest_subtree_split() {
+  local dest=$1
+  git log --grep="^git-subtree-dir: $dest/*\$" --format=%B -n 1 |
+    awk '$1 == "git-subtree-split:" { print $2; exit }'
+}
+
+ensure_subtree_initialized() {
+  local dest=$1 local_split
+  subtree_initialized "$dest" && return 0
+  printf 'Initializing subtree metadata for %s...\n' "$dest"
+  local_split=$(git subtree split --prefix="$dest" --quiet)
+  git commit --allow-empty \
+    -m "chore(skills): initialize $dest subtree" \
+    -m "git-subtree-dir: $dest" \
+    -m "git-subtree-split: $local_split" >/dev/null
+}
+
+# Print the diff between the current dest tree and the patched upstream tree.
+diff_source() {
+  local dest=$1 tree_dir=$2 split_commit=$3 fmt=$4
+  local work diff_output diff_status=0
+  local -a diff_args=()
+  work="$TMP_ROOT/cmp"
+  diff_output="$TMP_ROOT/diff.out"
+  rm -rf -- "$work"
+  mkdir -p -- "$work/current" "$work/upstream"
+  [[ -d "$ROOT/$dest" ]] && cp -R -- "$ROOT/$dest"/. "$work/current"/
+  cp -R -- "$tree_dir"/. "$work/upstream"/
+  case "$fmt" in
+    name-status)
+      printf '\nChanged paths from current %s to upstream %s:\n' "$dest" "$split_commit"
+      diff_args=(--name-status) ;;
+    stat)
+      printf '\nDiff stat from current %s to upstream %s:\n' "$dest" "$split_commit"
+      diff_args=(--stat) ;;
+    patch)
+      printf '\nDiff from current %s to upstream %s:\n' "$dest" "$split_commit" ;;
+  esac
+  (
+    cd "$work"
+    git diff --no-index --no-renames "${diff_args[@]+"${diff_args[@]}"}" current upstream >"$diff_output"
+  ) || diff_status=$?
+  if [[ -s "$diff_output" ]]; then
+    sed -e 's#1/current#current#g' -e 's#2/upstream#upstream#g' "$diff_output"
+  else
+    printf 'No changed paths.\n'
+  fi
+  [[ "$diff_status" == 0 || "$diff_status" == 1 ]] || return "$diff_status"
+}
+
+sync_source() {
+  local name=$1 dry=$2 fmt=$3
+  local url branch subdir dest split_commit tree_dir
+  local patched_tree latest_split latest_tree patched_commit
+  url=$(source_field "$name" url);       [[ -n "$url" ]]    || die "source $name: missing url"
+  branch=$(source_field "$name" branch); branch=${branch:-main}
+  subdir=$(source_field "$name" subdir); [[ -n "$subdir" ]] || die "source $name: missing subdir"
+  dest=$(source_field "$name" dest);     [[ -n "$dest" ]]   || die "source $name: missing dest"
+
+  printf '\n%s── %s ──%s %s%s → %s%s\n' "$C_BOLD" "$name" "$C_RESET" "$C_DIM" "$url" "$dest" "$C_RESET"
+  printf 'Fetching %s %s...\n' "$url" "$branch"
+  git fetch --no-tags "$url" "$branch"
+  printf 'Splitting upstream %s/ ...\n' "$subdir"
+  split_commit=$(git subtree split --quiet --prefix="$subdir" FETCH_HEAD)
+
+  tree_dir="$TMP_ROOT/$(_var_safe "$name").tree"
+  rm -rf -- "$tree_dir"
+  mkdir -p -- "$tree_dir"
+  git archive "$split_commit" | tar -x -C "$tree_dir"
+  apply_source_rules "$tree_dir" "$name"
+
+  if [[ "$dry" == 1 ]]; then
+    diff_source "$dest" "$tree_dir" "$split_commit" "$fmt"
+    return 0
+  fi
+
+  ensure_subtree_initialized "$dest"
+  patched_tree=$(create_tree_from_dir "$tree_dir")
+  latest_split=$(latest_subtree_split "$dest")
+  if [[ -n "$latest_split" ]]; then
+    latest_tree=$(git rev-parse "$latest_split^{tree}")
+    if [[ "$latest_tree" == "$patched_tree" ]]; then
+      printf 'No upstream changes; merge skipped.\n'
+      return 0
+    fi
+  fi
+  patched_commit=$(git commit-tree "$patched_tree" -p "$split_commit" \
+    -m "Apply grimoire $name sync rules")
+  printf 'Merging upstream split into %s...\n' "$dest"
+  git subtree merge --prefix="$dest" --squash \
+    --message="chore(skills): sync $name skills" "$patched_commit"
+}
+
+main() {
+  local dry=0 fmt=name-status
+  local -a chosen=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)  usage; exit 0 ;;
+      --dry-run)  dry=1; shift ;;
+      --stat)     dry=1; fmt=stat; shift ;;
+      --diff)     dry=1; fmt=patch; shift ;;
+      --)         shift; while [[ $# -gt 0 ]]; do chosen+=("$1"); shift; done ;;
+      -*)         die "unknown option: $1" ;;
+      *)          chosen+=("$1"); shift ;;
+    esac
+  done
+
+  command -v git >/dev/null 2>&1 || die "git is required"
+  git -C "$ROOT" subtree --help >/dev/null 2>&1 || die "git subtree is required"
+  command -v tar >/dev/null 2>&1 || die "tar is required"
+
+  load_sources_toml "$VENDOR_FILE"
+  [[ ${#SOURCE_NAMES[@]} -eq 0 ]] && die "no sources defined in $VENDOR_FILE"
+  if [[ ${#chosen[@]} -eq 0 ]]; then
+    chosen=("${SOURCE_NAMES[@]}")
+  else
+    local s known
+    for s in "${chosen[@]}"; do
+      if ! source_exists "$s"; then
+        known=$(IFS=', '; printf '%s' "${SOURCE_NAMES[*]}")
+        die "unknown source: $s (known: $known)"
+      fi
+    done
+  fi
+
+  cd "$ROOT"
+  if [[ "$dry" == 0 && -n "$(git status --porcelain)" ]]; then
+    die "worktree is not clean; commit or stash local changes before syncing"
+  fi
+
+  TMP_ROOT=$(mktemp -d)
+  trap cleanup EXIT
+
+  local name
+  for name in "${chosen[@]}"; do
+    sync_source "$name" "$dry" "$fmt"
+  done
+  printf '\n'
+}
+
+main "$@"
