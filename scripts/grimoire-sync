@@ -95,6 +95,14 @@ subtree_initialized() {
   [[ -n "$(git log --grep="git-subtree-dir: $dest" --format=%H -n 1)" ]]
 }
 
+git_subtree_available() {
+  local output
+  if output=$(git -C "$ROOT" subtree 2>&1); then
+    return 0
+  fi
+  [[ "$output" == *"usage: git subtree"* ]]
+}
+
 latest_subtree_split() {
   local dest=$1
   git log --grep="^git-subtree-dir: $dest/*\$" --format=%B -n 1 |
@@ -209,7 +217,7 @@ main() {
   done
 
   command -v git >/dev/null 2>&1 || die "git is required"
-  git -C "$ROOT" subtree --help >/dev/null 2>&1 || die "git subtree is required"
+  git_subtree_available || die "git subtree is required"
   command -v tar >/dev/null 2>&1 || die "tar is required"
 
   load_sources_toml "$VENDOR_FILE"
