@@ -150,6 +150,10 @@ exclude = ["scaffold-exercises"]   # drop skills by leaf name (or a path)
 rename  = ["review:matt-review"]   # rename a leaf skill (and its SKILL.md name:)
 ```
 
+Use `subdir = "."` for a skill repo whose `SKILL.md` lives at the repo root.
+Use `include = ["skill-name"]` when you want only specific top-level paths from
+the upstream subdir.
+
 Sync every source, or one by name:
 
 ```bash

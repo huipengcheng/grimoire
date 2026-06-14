@@ -21,13 +21,31 @@ cleanup() { [[ -n "$TMP_ROOT" ]] && rm -rf -- "$TMP_ROOT"; }
 
 usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; }
 
-# Apply a source's exclude/rename rules to a freshly extracted upstream tree.
-# exclude drops a skill by leaf name (or an explicit "<dir>/..." path under the
-# subdir). rename renames a leaf skill dir and rewrites its SKILL.md `name:` to
-# match, so the installed skill (keyed on the leaf dir name) and its frontmatter
-# agree.
+# Apply a source's include/exclude/rename rules to a freshly extracted upstream
+# tree. include keeps only listed top-level paths from the subdir; exclude drops
+# a skill by leaf name (or an explicit "<dir>/..." path under the subdir).
+# rename renames a leaf skill dir and rewrites its SKILL.md `name:` to match,
+# so the installed skill (keyed on the leaf dir name) and its frontmatter agree.
 apply_source_rules() {
-  local tree_dir=$1 name=$2 item pair old new dir parent skill_md tmp
+  local tree_dir=$1 name=$2 item pair old new dir parent skill_md tmp path
+  local -a includes=()
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    case "$item" in
+      */*) die "source $name: include only supports top-level paths: $item" ;;
+    esac
+    [[ -e "$tree_dir/$item" ]] || die "source $name: include path not found: $item"
+    includes+=("$item")
+  done < <(load_string_array "$VENDOR_FILE" include "$name")
+  if [[ ${#includes[@]} -gt 0 ]]; then
+    while IFS= read -r path; do
+      [[ -z "$path" ]] && continue
+      item=$(basename -- "$path")
+      if ! array_index "$item" "${includes[@]+"${includes[@]}"}" >/dev/null; then
+        rm -rf -- "$path"
+      fi
+    done < <(find "$tree_dir" -mindepth 1 -maxdepth 1 2>/dev/null)
+  fi
   while IFS= read -r item; do
     [[ -z "$item" ]] && continue
     case "$item" in
@@ -139,8 +157,13 @@ sync_source() {
   printf '\n%s── %s ──%s %s%s → %s%s\n' "$C_BOLD" "$name" "$C_RESET" "$C_DIM" "$url" "$dest" "$C_RESET"
   printf 'Fetching %s %s...\n' "$url" "$branch"
   git fetch --no-tags "$url" "$branch"
-  printf 'Splitting upstream %s/ ...\n' "$subdir"
-  split_commit=$(git subtree split --quiet --prefix="$subdir" FETCH_HEAD)
+  if [[ "$subdir" == "." ]]; then
+    printf 'Using upstream repository root...\n'
+    split_commit=$(git rev-parse FETCH_HEAD)
+  else
+    printf 'Splitting upstream %s/ ...\n' "$subdir"
+    split_commit=$(git subtree split --quiet --prefix="$subdir" FETCH_HEAD)
+  fi
 
   tree_dir="$TMP_ROOT/$(_var_safe "$name").tree"
   rm -rf -- "$tree_dir"
