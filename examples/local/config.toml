@@ -7,8 +7,10 @@
 targets = ["claude"]
 
 # Disable items by fully-qualified name: "<origin>/<kind>/<name>".
-# Origins: "self" (grimoire's own) or "local" (this machine).
+# <origin> is the install origin: "self" (grimoire's own, incl. vendored skills),
+# "local" (this machine), or a target-scoped "<target>/self" / "<target>/local".
 disabled = [
+  # "self/skills/tdd",            # any of grimoire's items, incl. vendored skills
   # "self/agents/eval-executor",
-  # "self/skills/tdd",
+  # "claude/local/skills/foo",    # a target-scoped local item
 ]
