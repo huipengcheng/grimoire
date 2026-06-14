@@ -174,8 +174,8 @@ load_string_array() {
 
 # ── Disabled list ────────────────────────────────────────────────────────────
 # Items are turned off by fully-qualified name "<origin>/<kind>/<name>", where
-# <origin> is the install origin label: self | local | <target>/self |
-# <target>/local. Read from local/config.toml's `disabled` array.
+# <origin> is the install origin label: self | local. Read from
+# local/config.toml's `disabled` array.
 
 declare -a DISABLED=()
 
@@ -222,33 +222,26 @@ discover() {
 }
 
 # ── Resolution ───────────────────────────────────────────────────────────────
-# The item sources for a (kind, target) form one precedence stack. Defining it
-# once here is the single source of truth for "local wins, target wins"; install
-# resolves the global stack (no target) for its plan preview and the full stack
-# per target. Stack order, least specific first:
-#   self            <repo>/<kind>
-#   local           local/<kind>
-#   <target>/self   <repo>/<target>/<kind>
-#   <target>/local  local/<target>/<kind>
+# The item sources for a kind form one precedence stack. Defining it once here is
+# the single source of truth for "local wins over self". Stack order, least
+# specific first:
+#   self    <repo>/<kind>
+#   local   local/<kind>
 
-# item_layers <kind> [target] — print "origin<TAB>dir", least specific first.
+# item_layers <kind> — print "origin<TAB>dir", least specific first.
 item_layers() {
-  local kind=$1 target=${2-}
+  local kind=$1
   printf 'self\t%s\n'  "$ROOT/$kind"
   printf 'local\t%s\n' "$LOCAL_DIR/$kind"
-  if [[ -n "$target" ]]; then
-    printf '%s/self\t%s\n'  "$target" "$ROOT/$target/$kind"
-    printf '%s/local\t%s\n' "$target" "$LOCAL_DIR/$target/$kind"
-  fi
 }
 
-# resolve_items <kind> [target] [notify] — print effective items as
+# resolve_items <kind> [notify] — print effective items as
 # "name<TAB>path<TAB>origin", sorted by name. Later layers override earlier ones
 # by name; an item whose "<origin>/<kind>/<name>" is in DISABLED is dropped at
 # its layer. Dies on a duplicate name within one layer (an ambiguous install).
 # notify=1 reports skips and overrides on stderr (used once for the plan preview).
 resolve_items() {
-  local kind=$1 target=${2-} notify=${3-0}
+  local kind=$1 notify=${2-0}
   local -a names=() paths=() origins=()
   local origin dir name path fqn idx i
   while IFS=$'\t' read -r origin dir; do
@@ -275,7 +268,7 @@ resolve_items() {
         origins+=("$origin")
       fi
     done < <(discover "$kind" "$dir")
-  done < <(item_layers "$kind" "$target")
+  done < <(item_layers "$kind")
   for ((i = 0; i < ${#names[@]}; i++)); do
     printf '%s\t%s\t%s\n' "${names[$i]}" "${paths[$i]}" "${origins[$i]}"
   done | LC_ALL=C sort -t $'\t' -k1,1

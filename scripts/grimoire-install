@@ -17,14 +17,13 @@ TEMP_ARTIFACT_DIR=""
 
 # ── Plan ───────────────────────────────────────────────────────────────────
 
-# Print the target-agnostic plan: the global (self + local) items shared by every
-# target. Skip and override notices for this global stack are reported once here
-# (on stderr, via resolve_items' notify mode).
+# Print the plan: the self + local items installed to every target. Skip and
+# override notices are reported once here (on stderr, via resolve_items' notify).
 print_plan() {
   printf '%s── plan ──%s\n' "$C_BOLD" "$C_RESET"
   local kind items name path origin
   for kind in "${KINDS[@]}"; do
-    items=$(resolve_items "$kind" "" 1)
+    items=$(resolve_items "$kind" 1)
     [[ -z "$items" ]] && continue
     while IFS=$'\t' read -r name path origin; do
       [[ -z "$name" ]] && continue
@@ -166,7 +165,7 @@ install_target() {
     kind_root=$(target_path "$root_expanded" "$kind_rel")
     kept=()
     package_has_items=0
-    items=$(resolve_items "$kind" "$name")
+    items=$(resolve_items "$kind")
     while IFS=$'\t' read -r p_name p_path p_origin; do
       [[ -z "$p_name" ]] && continue
       kept+=("$p_name")

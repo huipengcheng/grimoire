@@ -30,9 +30,6 @@ grimoire/
 ├── skills/              # source may be nested; each leaf SKILL.md is one skill
 ├── agents/   commands/  # flat: each .md file is one item
 │
-├── claude/   codex/  …  # per-target items: a dir named after a target
-│   └── skills/ …        #   installs ONLY to that target
-│
 ├── registry.toml        # assistant → install paths
 ├── examples/local/      # copy-once templates for local/
 │
@@ -103,26 +100,6 @@ On install, the file written to each assistant is `<repo>/<target.agents_md>` + 
 Skill source directories may be nested to keep this repo organized, but the installer materializes each skill by its leaf directory name into `.grimoire-stow/` before stowing it because Claude, Codex, and Qoder expect `skills/<skill-name>/SKILL.md`.
 
 You can also drop machine-private items into `local/skills/`, `local/agents/`, etc. Same name as a shared item → `local` wins.
-
----
-
-## Target-Specific Items
-
-By default every skill, agent, and command installs to every target. To scope an item to one assistant, put it in a folder named after that target (the `registry.toml` key):
-
-```
-skills/my-skill/          # global — installs everywhere
-claude/skills/my-skill/   # installs ONLY to claude
-codex/agents/reviewer.md  # installs ONLY to codex
-```
-
-The same works per-machine under `local/`:
-
-```
-local/claude/skills/…     # claude-only, this machine
-```
-
-Precedence, most specific wins: `local/<target>/<kind>` › `<target>/<kind>` › `local/<kind>` › `<kind>`. A target-scoped item with the same name as a global one overrides it for that target only.
 
 ---
 
