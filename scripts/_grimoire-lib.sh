@@ -172,6 +172,31 @@ load_string_array() {
   ' "$file"
 }
 
+# ── Disabled list ────────────────────────────────────────────────────────────
+# Items are turned off by fully-qualified name "<origin>/<kind>/<name>", where
+# <origin> is the install origin label: self | local | <target>/self |
+# <target>/local. Read from local/config.toml's `disabled` array.
+
+declare -a DISABLED=()
+
+load_disabled() {
+  local d
+  DISABLED=()
+  [[ -f "$LOCAL_CONFIG" ]] || return 0
+  while IFS= read -r d; do
+    [[ -z "$d" ]] && continue
+    DISABLED+=("$d")
+  done < <(load_string_array "$LOCAL_CONFIG" disabled)
+}
+
+is_disabled() {
+  local fqn=$1 d
+  for d in "${DISABLED[@]+"${DISABLED[@]}"}"; do
+    [[ "$d" == "$fqn" ]] && return 0
+  done
+  return 1
+}
+
 # ── Discovery ──────────────────────────────────────────────────────────────
 # Print "name<TAB>path" lines for items of $kind under $root. Skill source
 # directories may be nested for repo organization, but installed skill names are
@@ -194,4 +219,64 @@ discover() {
     printf '%s\t%s\n' "$(basename "$p")" "$p"
   done < <(find "$root" -mindepth 1 -maxdepth 1 \
            ! -name '.*' ! -name '.gitkeep' 2>/dev/null | LC_ALL=C sort)
+}
+
+# ── Resolution ───────────────────────────────────────────────────────────────
+# The item sources for a (kind, target) form one precedence stack. Defining it
+# once here is the single source of truth for "local wins, target wins"; install
+# resolves the global stack (no target) for its plan preview and the full stack
+# per target. Stack order, least specific first:
+#   self            <repo>/<kind>
+#   local           local/<kind>
+#   <target>/self   <repo>/<target>/<kind>
+#   <target>/local  local/<target>/<kind>
+
+# item_layers <kind> [target] — print "origin<TAB>dir", least specific first.
+item_layers() {
+  local kind=$1 target=${2-}
+  printf 'self\t%s\n'  "$ROOT/$kind"
+  printf 'local\t%s\n' "$LOCAL_DIR/$kind"
+  if [[ -n "$target" ]]; then
+    printf '%s/self\t%s\n'  "$target" "$ROOT/$target/$kind"
+    printf '%s/local\t%s\n' "$target" "$LOCAL_DIR/$target/$kind"
+  fi
+}
+
+# resolve_items <kind> [target] [notify] — print effective items as
+# "name<TAB>path<TAB>origin", sorted by name. Later layers override earlier ones
+# by name; an item whose "<origin>/<kind>/<name>" is in DISABLED is dropped at
+# its layer. Dies on a duplicate name within one layer (an ambiguous install).
+# notify=1 reports skips and overrides on stderr (used once for the plan preview).
+resolve_items() {
+  local kind=$1 target=${2-} notify=${3-0}
+  local -a names=() paths=() origins=()
+  local origin dir name path fqn idx i
+  while IFS=$'\t' read -r origin dir; do
+    [[ -z "$origin" ]] && continue
+    while IFS=$'\t' read -r name path; do
+      [[ -z "$name" ]] && continue
+      fqn="$origin/$kind/$name"
+      if is_disabled "$fqn"; then
+        [[ "$notify" == 1 ]] &&
+          printf '  %sskip (disabled): %s%s\n' "$C_DIM" "$fqn" "$C_RESET" >&2
+        continue
+      fi
+      if idx=$(array_index "$name" "${names[@]+"${names[@]}"}"); then
+        [[ "${origins[$idx]}" == "$origin" ]] &&
+          die "duplicate $origin item name: $kind/$name"
+        [[ "$notify" == 1 ]] &&
+          printf '  %s!%s %s/%s: %s overridden by %s\n' \
+            "$C_YELLOW" "$C_RESET" "$kind" "$name" "${origins[$idx]}" "$origin" >&2
+        paths[$idx]=$path
+        origins[$idx]=$origin
+      else
+        names+=("$name")
+        paths+=("$path")
+        origins+=("$origin")
+      fi
+    done < <(discover "$kind" "$dir")
+  done < <(item_layers "$kind" "$target")
+  for ((i = 0; i < ${#names[@]}; i++)); do
+    printf '%s\t%s\t%s\n' "${names[$i]}" "${paths[$i]}" "${origins[$i]}"
+  done | LC_ALL=C sort -t $'\t' -k1,1
 }

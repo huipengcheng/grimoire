@@ -17,86 +17,20 @@ TEMP_ARTIFACT_DIR=""
 
 # ── Plan ───────────────────────────────────────────────────────────────────
 
-DISABLED=()
-is_disabled() {
-  local fqn=$1 d
-  for d in "${DISABLED[@]+"${DISABLED[@]}"}"; do
-    [[ "$d" == "$fqn" ]] && return 0
-  done
-  return 1
-}
-
-PLAN=""
-
-build_plan() {
-  PLAN=""
-  local -a names=()
-  local -a origins=()
-  local -a paths=()
-  local kind name path fqn idx line i
-  for kind in "${KINDS[@]}"; do
-    names=()
-    origins=()
-    paths=()
-    while IFS=$'\t' read -r name path; do
-      [[ -z "$name" ]] && continue
-      fqn="self/$kind/$name"
-      if is_disabled "$fqn"; then
-        printf '  %sskip (disabled): %s%s\n' "$C_DIM" "$fqn" "$C_RESET"
-        continue
-      fi
-      if idx=$(array_index "$name" "${names[@]+"${names[@]}"}"); then
-        die "duplicate self item name: $kind/$name"
-      fi
-      names+=("$name")
-      origins+=("self")
-      paths+=("$path")
-    done < <(discover "$kind" "$ROOT/$kind")
-
-    while IFS=$'\t' read -r name path; do
-      [[ -z "$name" ]] && continue
-      fqn="local/$kind/$name"
-      if is_disabled "$fqn"; then
-        printf '  %sskip (disabled): %s%s\n' "$C_DIM" "$fqn" "$C_RESET"
-        continue
-      fi
-      if idx=$(array_index "$name" "${names[@]+"${names[@]}"}"); then
-        if [[ "${origins[$idx]}" == "local" ]]; then
-          die "duplicate local item name: $kind/$name"
-        fi
-        printf '  %s!%s %s/%s: self overridden by local\n' \
-          "$C_YELLOW" "$C_RESET" "$kind" "$name"
-        origins[$idx]=local
-        paths[$idx]=$path
-      else
-        names+=("$name")
-        origins+=("local")
-        paths+=("$path")
-      fi
-    done < <(discover "$kind" "$LOCAL_DIR/$kind")
-
-    if [[ ${#names[@]} -gt 0 ]]; then
-      while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        PLAN+="$line"$'\n'
-      done < <(
-        for ((i = 0; i < ${#names[@]}; i++)); do
-          printf '%s\t%s\t%s\t%s\n' \
-            "$kind" "${names[$i]}" "${paths[$i]}" "${origins[$i]}"
-        done | LC_ALL=C sort -t $'\t' -k2,2
-      )
-    fi
-  done
-}
-
+# Print the target-agnostic plan: the global (self + local) items shared by every
+# target. Skip and override notices for this global stack are reported once here
+# (on stderr, via resolve_items' notify mode).
 print_plan() {
   printf '%s── plan ──%s\n' "$C_BOLD" "$C_RESET"
-  [[ -z "$PLAN" ]] && return 0
-  local kind name path origin
-  while IFS=$'\t' read -r kind name path origin; do
-    [[ -z "$kind" ]] && continue
-    printf '  %-10s %-32s %sfrom %s%s\n' "$kind" "$name" "$C_DIM" "$origin" "$C_RESET"
-  done <<< "$PLAN"
+  local kind items name path origin
+  for kind in "${KINDS[@]}"; do
+    items=$(resolve_items "$kind" "" 1)
+    [[ -z "$items" ]] && continue
+    while IFS=$'\t' read -r name path origin; do
+      [[ -z "$name" ]] && continue
+      printf '  %-10s %-32s %sfrom %s%s\n' "$kind" "$name" "$C_DIM" "$origin" "$C_RESET"
+    done <<< "$items"
+  done
 }
 
 # ── Filesystem ops ─────────────────────────────────────────────────────────
@@ -196,39 +130,6 @@ render_agents_md() {
   fi
 }
 
-# Effective items of $kind for target $2, merging the global PLAN with the
-# target's own scoped dirs: <root>/<target>/<kind> (self) and
-# local/<target>/<kind> (local). Prints "name<TAB>path<TAB>origin" sorted by
-# name; scoped sources override global entries (and each other, local last) on
-# name collision.
-target_kind_items() {
-  local kind=$1 target=$2
-  local -a names=() paths=() origins=()
-  local p_kind p_name p_path p_origin
-  local spec origin dir name path idx i
-
-  while IFS=$'\t' read -r p_kind p_name p_path p_origin; do
-    [[ "$p_kind" != "$kind" ]] && continue
-    names+=("$p_name"); paths+=("$p_path"); origins+=("$p_origin")
-  done <<< "$PLAN"
-
-  for spec in "self:$ROOT/$target/$kind" "local:$LOCAL_DIR/$target/$kind"; do
-    origin="${spec%%:*}"; dir="${spec#*:}"
-    while IFS=$'\t' read -r name path; do
-      [[ -z "$name" ]] && continue
-      if idx=$(array_index "$name" "${names[@]+"${names[@]}"}"); then
-        paths[$idx]=$path; origins[$idx]="$target/$origin"
-      else
-        names+=("$name"); paths+=("$path"); origins+=("$target/$origin")
-      fi
-    done < <(discover "$kind" "$dir")
-  done
-
-  for ((i = 0; i < ${#names[@]}; i++)); do
-    printf '%s\t%s\t%s\n' "${names[$i]}" "${paths[$i]}" "${origins[$i]}"
-  done | LC_ALL=C sort -t $'\t' -k1,1
-}
-
 install_target() {
   local name=$1 dry=$2 prune=$3 artifact_base=$4
   local root_raw root_expanded agents_md_name
@@ -257,7 +158,7 @@ install_target() {
   fi
 
   local kind kind_rel kind_root status entry entry_target rel keep k pdir package_has_items
-  local p_name p_path p_origin
+  local p_name p_path p_origin items
   local -a kept=() find_depth=()
   for kind in "${KINDS[@]}"; do
     kind_rel=$(target_field "$name" "$kind")
@@ -265,6 +166,7 @@ install_target() {
     kind_root=$(target_path "$root_expanded" "$kind_rel")
     kept=()
     package_has_items=0
+    items=$(resolve_items "$kind" "$name")
     while IFS=$'\t' read -r p_name p_path p_origin; do
       [[ -z "$p_name" ]] && continue
       kept+=("$p_name")
@@ -273,7 +175,7 @@ install_target() {
       package_has_items=1
       printf '  %s%-20s%s %s %s← %s (%s)%s\n' \
         "$C_CYAN" "$kind" "$C_RESET" "$p_name" "$C_DIM" "$p_origin" "$status" "$C_RESET"
-    done < <(target_kind_items "$kind" "$name")
+    done <<< "$items"
     if [[ "$package_has_items" == 1 ]]; then
       run_stow "$target_artifact" "$kind_root" "$kind" "$dry"
     fi
@@ -334,14 +236,7 @@ main() {
   done
 
   load_targets_toml "$REGISTRY_FILE"
-
-  if [[ -f "$LOCAL_CONFIG" ]]; then
-    local d
-    while IFS= read -r d; do
-      [[ -z "$d" ]] && continue
-      DISABLED+=("$d")
-    done < <(load_string_array "$LOCAL_CONFIG" disabled)
-  fi
+  load_disabled
 
   if [[ "$all" == 1 || ${#chosen[@]} -eq 0 ]]; then
     chosen=()
@@ -374,7 +269,6 @@ main() {
   fi
   prepare_artifact_root "$artifact_base"
 
-  build_plan
   print_plan
 
   [[ "$dry" == 1 ]] && printf '\n%s(dry run — nothing written)%s\n' "$C_DIM" "$C_RESET"
