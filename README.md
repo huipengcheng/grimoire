@@ -80,7 +80,7 @@ $EDITOR local/config.toml          # set targets = ["claude", ...]
 # local/config.toml
 targets  = ["claude", "codex"]      # this machine installs to these
 disabled = [
-  "self/agents/eval-executor",      # turn off one of your own items
+  "agents/eval-executor",           # turn off one item, by kind/name
 ]
 ```
 

@@ -173,9 +173,9 @@ load_string_array() {
 }
 
 # ── Disabled list ────────────────────────────────────────────────────────────
-# Items are turned off by fully-qualified name "<origin>/<kind>/<name>", where
-# <origin> is the install origin label: self | local. Read from
-# local/config.toml's `disabled` array.
+# Items are turned off by fully-qualified name "<kind>/<name>" (e.g. skills/tdd).
+# A disabled name drops the item from every layer (self and local alike), read
+# from local/config.toml's `disabled` array.
 
 declare -a DISABLED=()
 
@@ -237,8 +237,8 @@ item_layers() {
 
 # resolve_items <kind> [notify] — print effective items as
 # "name<TAB>path<TAB>origin", sorted by name. Later layers override earlier ones
-# by name; an item whose "<origin>/<kind>/<name>" is in DISABLED is dropped at
-# its layer. Dies on a duplicate name within one layer (an ambiguous install).
+# by name; an item whose "<kind>/<name>" is in DISABLED is dropped from every
+# layer. Dies on a duplicate name within one layer (an ambiguous install).
 # notify=1 reports skips and overrides on stderr (used once for the plan preview).
 resolve_items() {
   local kind=$1 notify=${2-0}
@@ -248,7 +248,7 @@ resolve_items() {
     [[ -z "$origin" ]] && continue
     while IFS=$'\t' read -r name path; do
       [[ -z "$name" ]] && continue
-      fqn="$origin/$kind/$name"
+      fqn="$kind/$name"
       if is_disabled "$fqn"; then
         [[ "$notify" == 1 ]] &&
           printf '  %sskip (disabled): %s%s\n' "$C_DIM" "$fqn" "$C_RESET" >&2
