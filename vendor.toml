@@ -17,7 +17,7 @@ branch  = "main"
 subdir  = "skills"
 dest    = "skills/mattpocock"
 exclude = ["grill-me", "migrate-to-shoehorn", "scaffold-exercises", "ubiquitous-language"]
-rename  = ["review:matt-review"]
+rename  = ["code-review:matt-review"]
 
 [humanizer]
 url     = "https://github.com/blader/humanizer.git"
