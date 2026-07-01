@@ -1,120 +1,28 @@
 # AGENTS.md
 
-## Project Overview
+Guidance for AI coding agents (Claude Code, Codex, Warp, etc.) working in this repository.
 
-This repository is a portable "grimoire" for AI assistant configuration. It
-stores shared base instructions, skills, agents, and slash commands, then
-installs them into assistant-specific config directories through GNU Stow.
+## What this repo is
 
-Important paths:
+A portable agent skill implemented entirely as Markdown. The runtime artifact is `SKILL.md`: the agent reads its YAML frontmatter (metadata + allowed tools) followed by the editor prompt. There is no build step and no code to run, and the repo should avoid wording that limits support to one or two harnesses.
 
-- `AGENTS.md`: base instructions for AGENTS.md-reading tools such as Codex,
-  OpenCode, and Qoder.
-- `CLAUDE.md`: Claude-specific base instructions. Keep it separate unless the
-  user explicitly asks for parity.
-- `skills/`: shared skills. Skill source directories may be nested, but each
-  installed skill is keyed by the leaf directory containing `SKILL.md`.
-- `agents/` and `commands/`: flat shared item directories; each non-hidden file
-  or directory is one installable item.
-- `registry.toml`: assistant target definitions and destination paths.
-- `vendor.toml`: external skill sources synced with `git subtree`.
-- `local/`: per-machine overrides and private items. Treat this as local state;
-  do not edit it unless the user asks.
-- `.grimoire-stow/`: generated install artifacts. Do not edit directly.
-- `scripts/`: Bash implementation for `install`, `uninstall`, `doctor`, and
-  `sync`, dispatched by `./grimoire.sh`.
+## Key files
 
-## Working Rules
+- `SKILL.md` — the skill itself. YAML frontmatter (`name`, `version`, `description`, `compatibility`, `allowed-tools`) followed by the canonical, numbered pattern list with before/after examples. **This is the source of truth.**
+- `README.md` — for humans: installation, usage, a summary table of the patterns, and a version history.
+- `.claude-plugin/plugin.json` — optional Claude Code plugin manifest.
+- `.claude-plugin/marketplace.json` — optional single-repo marketplace entry so `/plugin marketplace add blader/humanizer` works.
 
-State assumptions before changing behavior. If the request has multiple
-reasonable interpretations, name them and ask or choose the smallest reversible
-change.
+## The maintenance contract
 
-Keep changes surgical. Touch only files needed for the request, match existing
-style, and avoid speculative abstractions or unrelated cleanup. If you notice
-unrelated dead code or drift, mention it instead of fixing it.
+`SKILL.md` and `README.md` must stay in sync. When you change behavior or content:
 
-Prefer simple shell and TOML changes over new dependencies. The project is
-designed around Bash 3.2+, `awk`, `git`, `tar`, and GNU Stow; do not introduce
-Python, Node, or another runtime for normal operation unless explicitly asked.
+- **Patterns:** the skill currently defines **33 numbered patterns**. If you add, remove, or renumber any, update the README pattern table, its "N Patterns Detected" heading, and every cross-reference in the same change. Keep numbering stable unless you are deliberately renumbering.
+- **Version:** `SKILL.md` frontmatter has a `version:` field, `README.md` has a "Version History" section, and `.claude-plugin/plugin.json` has a `version` field. Bump them together so package metadata matches the skill. (`marketplace.json` intentionally omits a version so `plugin.json` stays the package source of truth.)
+- **Compatibility:** keep install and usage language harness-neutral. The skill should work in any agent harness that can load Markdown skill instructions; Claude Code, OpenCode, Codex, and other harnesses are examples, not limits.
+- **Non-obvious fixes:** if you change the prompt to handle a tricky failure mode (a repeated mis-edit, an unexpected tone shift), add a short note to the README version history explaining what was fixed and why.
 
-When editing scripts, preserve the current defensive style: `set -euo pipefail`,
-small helpers, explicit refusal before overwriting non-owned files, and dry-run
-support where the command already has it.
+## Editing SKILL.md
 
-Write new code, comments, identifiers, commit messages, and developer-facing
-documentation in English. Preserve existing non-English user-facing text,
-fixtures, and translations unless the task asks to change them.
-
-## Install Model
-
-The installer resolves items by kind from two layers:
-
-1. `self`: repository directories such as `skills/`, `agents/`, and `commands/`.
-2. `local`: matching directories under `local/`.
-
-`local` wins on same-name items. `local/config.toml` can disable any item by
-fully-qualified name such as `skills/tdd` or `agents/eval-executor`.
-
-For `AGENTS.md` and `CLAUDE.md`, install renders the root file plus the matching
-local overlay (`local/AGENTS.md` or `local/CLAUDE.md`) into `.grimoire-stow/`
-before stowing it into the target root.
-
-When adding a target, update `registry.toml`; avoid script changes unless the
-new assistant needs a genuinely new install model.
-
-When adding or moving a skill, ensure the skill directory contains `SKILL.md`.
-Avoid duplicate skill leaf names, even in different category folders, because
-installed skill names are flattened to their leaf directory names.
-
-## Common Commands
-
-- `./grimoire.sh doctor`: check local config, skill markers, name conflicts, and
-  broken symlinks.
-- `./grimoire.sh install --dry-run`: preview install for targets in
-  `local/config.toml`.
-- `./grimoire.sh install <target> --dry-run`: preview one target.
-- `./grimoire.sh uninstall <target> --dry-run`: preview removal for one target.
-- `./grimoire.sh sync --dry-run`: preview vendored skill updates.
-- `./grimoire.sh sync --stat` or `./grimoire.sh sync --diff`: inspect vendored
-  changes before applying them.
-
-Use dry-run commands before real install, uninstall, or sync changes when the
-request touches deployment behavior.
-
-## Verification
-
-For documentation-only changes, inspect the diff and run no heavier checks
-unless the edited documentation describes generated behavior.
-
-For changes to discovery, resolution, install, uninstall, or target metadata,
-run:
-
-```bash
-./grimoire.sh doctor
-./grimoire.sh install --dry-run
-```
-
-For vendoring changes, prefer previewing first:
-
-```bash
-./grimoire.sh sync --dry-run
-```
-
-Real `sync` uses network access and requires a clean worktree because it performs
-`git subtree` operations. Do not run it casually.
-
-## Git Workflow
-
-The worktree may contain user changes. Never revert changes you did not make.
-If unrelated files are dirty, leave them alone.
-
-When creating commits, use Conventional Commits:
-`<type>(<scope>): <description>`.
-
-Allowed types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, and
-`ci`.
-
-Add a commit body only when it materially explains rationale, impact, migration
-notes, or test coverage. Do not include assistant or vendor metadata in commit
-messages.
+- Preserve valid YAML frontmatter (formatting and indentation).
+- The prompt below the frontmatter is the product. Edit it like a careful instruction document, not code.

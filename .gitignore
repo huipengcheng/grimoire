@@ -1,6 +1,0 @@
-/local/*
-!/local/.gitkeep
-/.grimoire-stow/
-/.claude/
-__pycache__/
-*.pyc
