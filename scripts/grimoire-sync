@@ -109,6 +109,11 @@ latest_subtree_split() {
     awk '$1 == "git-subtree-split:" { print $2; exit }'
 }
 
+commit_exists() {
+  local commit=$1
+  git rev-parse --verify --quiet "$commit^{commit}" >/dev/null
+}
+
 ensure_subtree_initialized() {
   local dest=$1 local_split
   subtree_initialized "$dest" && return 0
@@ -116,6 +121,20 @@ ensure_subtree_initialized() {
   local_split=$(git subtree split --prefix="$dest" --quiet)
   git commit --allow-empty \
     -m "chore(skills): initialize $dest subtree" \
+    -m "git-subtree-dir: $dest" \
+    -m "git-subtree-split: $local_split" >/dev/null
+}
+
+refresh_stale_subtree_metadata() {
+  local dest=$1 latest_split local_split
+  latest_split=$(latest_subtree_split "$dest")
+  [[ -n "$latest_split" ]] || return 0
+  commit_exists "$latest_split" && return 0
+
+  printf 'Refreshing stale subtree metadata for %s...\n' "$dest"
+  local_split=$(git subtree split --ignore-joins --prefix="$dest" --quiet)
+  git commit --allow-empty \
+    -m "chore(skills): refresh $dest subtree metadata" \
     -m "git-subtree-dir: $dest" \
     -m "git-subtree-split: $local_split" >/dev/null
 }
@@ -185,6 +204,7 @@ sync_source() {
   fi
 
   ensure_subtree_initialized "$dest"
+  refresh_stale_subtree_metadata "$dest"
   patched_tree=$(create_tree_from_dir "$tree_dir")
   latest_split=$(latest_subtree_split "$dest")
   if [[ -n "$latest_split" ]]; then
