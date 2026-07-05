@@ -1,184 +1,213 @@
-# grimoire
+# Humanizer
 
-<div align="center">
-  <img src="./grimoire.svg" alt="grimoire" width="100%"/>
-</div>
+A portable agent skill that removes signs of AI-generated writing from text, making it sound more natural and human. It is plain Markdown, so it can run in any harness that supports skill-style instructions.
 
-<br/>
+## Installation
 
-<div align="center">
+### Skills CLI
 
-*A practitioner does not merely use tools.*
-*A practitioner binds them.*
-
-</div>
-
----
-
-A unified spellbook for coding assistants — **Claude Code**, **Codex**, **OpenCode**, **Qoder**, and any that follow.
-
-One repo holds your skills, subagents, slash commands, and base instructions. One command installs them everywhere. Per-machine customisation lives outside git.
-
----
-
-## Tome Structure
-
-```
-grimoire/
-├── AGENTS.md            # canonical base oath
-├── CLAUDE.md            # Claude-specific base oath
-├── skills/              # source may be nested; each leaf SKILL.md is one skill
-├── agents/   commands/  # flat: each .md file is one item
-│
-├── registry.toml        # assistant → install paths
-├── vendor.toml          # external skill sources (git subtree)
-├── examples/local/      # copy-once templates for local/
-│
-├── local/               # per-machine overrides (gitignored)
-│   ├── config.toml      #   targets selection, disabled list
-│   ├── AGENTS.md        #   appended to AGENTS.md targets (codex/opencode/qoder)
-│   ├── CLAUDE.md        #   appended to CLAUDE.md target (claude)
-│   └── skills/ …        #   private items
-│
-├── grimoire.sh          # entry point: dispatches `install`, `doctor`, …
-└── scripts/
-    ├── grimoire-install # install logic
-    ├── grimoire-doctor  # diagnose conflicts and orphans
-    ├── grimoire-sync    # vendor.toml → git subtree sync
-    └── _grimoire-lib.sh # shared TOML/discovery helpers
-```
-
-Requires `bash` 3.2+, `awk`, and GNU Stow — no Python or other runtime needed.
-
----
-
-## Quick Start
+Install with the cross-agent skills CLI:
 
 ```bash
-# 1. Tell grimoire which machine this is.
-mkdir -p local
-cp examples/local/config.toml local/config.toml
-$EDITOR local/config.toml          # set targets = ["claude", ...]
-
-# 2. Install.
-./grimoire.sh install              # or: ./grimoire.sh install --dry-run
+npx skills add blader/humanizer
 ```
 
-`install` with no target names installs every target listed in `local/config.toml`.
-`install --all` does the same thing; it does not install every target in `registry.toml`.
+Update an existing install:
 
 ```bash
-./grimoire.sh uninstall qoder      # remove one target
-./grimoire.sh uninstall --dry-run qoder
+npx skills update humanizer
 ```
 
----
-
-## Per-Machine Customisation
-
-`local/` is gitignored. Put per-machine bits there:
-
-```toml
-# local/config.toml
-targets  = ["claude", "codex"]      # this machine installs to these
-disabled = [
-  "agents/eval-executor",           # turn off one item, by kind/name
-]
-```
-
-```markdown
-<!-- local/AGENTS.md -->
-## Local Context
-This machine is the work laptop. Default repo root is ~/code/...
-```
-
-`AGENTS.md` and `CLAUDE.md` are separate base instruction files. They start from the same house style, but can diverge where Claude Code and AGENTS.md-reading tools need different guidance.
-
-On install, the file written to each assistant is `<repo>/<target.agents_md>` + `local/<target.agents_md>` — the local overlay mirrors the target's filename. Per assistant docs, the destination filename differs:
-
-- `claude` reads `~/.claude/CLAUDE.md`, with local overrides from `local/CLAUDE.md`
-- `codex`, `opencode`, `qoder` read `AGENTS.md`, with local overrides from `local/AGENTS.md`
-
-Skill source directories may be nested to keep this repo organized, but the installer materializes each skill by its leaf directory name into `.grimoire-stow/` before stowing it because Claude, Codex, and Qoder expect `skills/<skill-name>/SKILL.md`.
-
-You can also drop machine-private items into `local/skills/`, `local/agents/`, etc. Same name as a shared item → `local` wins.
-
----
-
-## Adding a New Assistant
-
-Add a stanza to `registry.toml`:
-
-```toml
-[new-assistant]
-root      = "~/.new-assistant"
-agents_md = "AGENTS.md"
-skills    = "skills"      # or omit kinds the assistant doesn't support
-commands  = "commands"
-```
-
-Kind paths are relative to `root` by default. Use `~` or `/` when one assistant stores a kind elsewhere. No script changes are needed; `./grimoire.sh install new-assistant` works.
-
-Hooks are intentionally not supported yet. Each assistant registers hooks differently, usually through a config file rather than by scanning a synced directory.
-
----
-
-## Doctor
+To install into every supported agent harness:
 
 ```bash
-./grimoire.sh doctor
+npx skills add blader/humanizer --agent '*'
 ```
 
-Reports: missing local config, name collisions between self and local, broken symlinks left over in installed targets.
-
----
-
-## Vendoring Skills
-
-External skill sources live in `vendor.toml`. Each `[<name>]` block is one
-source — an upstream repo, the `subdir` to pull, and the `dest` it lands in
-(kept under `skills/` so it installs like any other skill):
-
-```toml
-# vendor.toml
-[mattpocock]
-url     = "https://github.com/mattpocock/skills.git"
-branch  = "main"
-subdir  = "skills"
-dest    = "skills/mattpocock"
-exclude = ["scaffold-exercises"]   # drop skills by leaf name (or a path)
-rename  = ["review:matt-review"]   # rename a leaf skill (and its SKILL.md name:)
-```
-
-Use `subdir = "."` for a skill repo whose `SKILL.md` lives at the repo root.
-Use `include = ["skill-name"]` when you want only specific top-level paths from
-the upstream subdir.
-
-Sync every source, or one by name:
+To target one configured harness, pass its agent name:
 
 ```bash
-./grimoire.sh sync                 # all sources
-./grimoire.sh sync mattpocock      # one source
-./grimoire.sh sync --dry-run       # changed paths, no writes
-./grimoire.sh sync --stat          # diff stat
-./grimoire.sh sync --diff          # full patch
+npx skills add blader/humanizer --agent <agent-name>
 ```
 
-Sync uses `git subtree` with a squash merge, so clones of this repo need no
-submodule setup. Commit or stash local changes first; subtree merges require a
-clean worktree. `rename` is the fork-by-rename escape for when an upstream skill
-name would collide with one of yours — grimoire never silently overrides on a
-name clash, so renaming (or `exclude`) is how you resolve it.
+### Claude Code plugin
 
----
+Claude Code users can also install Humanizer as a plugin:
 
-## Philosophy
+```
+/plugin marketplace add blader/humanizer
+/plugin install humanizer@humanizer
+```
 
-Most people configure tools. This grimoire *shapes* tools — nudging them toward a particular aesthetic, a particular way of reasoning, a particular voice.
+The skill is then invoked as `/humanizer:humanizer`.
 
-The goal is not to make AI assistants more capable. They are already capable.
-The goal is to make them *mine*.
+### Manual
 
----
+Any agent harness can use the skill directly because the runtime artifact is `SKILL.md`. Install it wherever your harness expects skill directories, or copy `SKILL.md` into an existing skill folder.
 
-*Here begins the work.*
+For example:
+
+```bash
+git clone https://github.com/blader/humanizer.git /path/to/your/skills/humanizer
+```
+
+Or, if you already have this repo cloned:
+
+```bash
+mkdir -p /path/to/your/skills/humanizer
+cp SKILL.md /path/to/your/skills/humanizer/
+```
+
+## Usage
+
+Invoke the skill however your agent harness exposes installed skills. Common forms include a slash command or a direct request:
+
+```
+/humanizer
+
+[paste your text here]
+```
+
+```
+Please humanize this text: [your text]
+```
+
+### Voice Calibration
+
+To match your personal writing style, provide a sample of your own writing:
+
+```
+/humanizer
+
+Here's a sample of my writing for voice matching:
+[paste 2-3 paragraphs of your own writing]
+
+Now humanize this text:
+[paste AI text to humanize]
+```
+
+The skill will analyze your sentence rhythm, word choices, and quirks, then apply them to the rewrite instead of producing generic "clean" output.
+
+## Overview
+
+Based on [Wikipedia's "Signs of AI writing"](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing) guide, maintained by WikiProject AI Cleanup. This comprehensive guide comes from observations of thousands of instances of AI-generated text.
+
+The skill also includes a final "obviously AI generated" audit pass and a second rewrite, to catch lingering AI-isms in the first draft.
+
+### Key Insight from Wikipedia
+
+> "LLMs use statistical algorithms to guess what should come next. The result tends toward the most statistically likely result that applies to the widest variety of cases."
+
+## 33 Patterns Detected (with Before/After Examples)
+
+### Content Patterns
+
+| # | Pattern | Before | After |
+|---|---------|--------|-------|
+| 1 | **Significance inflation** | "marking a pivotal moment in the evolution of..." | "was established in 1989 to collect regional statistics" |
+| 2 | **Notability name-dropping** | "cited in NYT, BBC, FT, and The Hindu" | "In a 2024 NYT interview, she argued..." |
+| 3 | **Superficial -ing analyses** | "symbolizing... reflecting... showcasing..." | Remove or expand with actual sources |
+| 4 | **Promotional language** | "nestled within the breathtaking region" | "is a town in the Gonder region" |
+| 5 | **Vague attributions** | "Experts believe it plays a crucial role" | "according to a 2019 survey by..." |
+| 6 | **Formulaic challenges** | "Despite challenges... continues to thrive" | Specific facts about actual challenges |
+
+### Language Patterns
+
+| # | Pattern | Before | After |
+|---|---------|--------|-------|
+| 7 | **AI vocabulary** | "Actually... additionally... testament... landscape... showcasing" | "also... remain common" |
+| 8 | **Copula avoidance** | "serves as... features... boasts" | "is... has" |
+| 9 | **Negative parallelisms / tailing negations** | "It's not just X, it's Y", "..., no guessing" | State the point directly |
+| 10 | **Rule of three** | "innovation, inspiration, and insights" | Use natural number of items |
+| 11 | **Synonym cycling** | "protagonist... main character... central figure... hero" | "protagonist" (repeat when clearest) |
+| 12 | **False ranges** | "from the Big Bang to dark matter" | List topics directly |
+| 13 | **Passive voice / subjectless fragments** | "No configuration file needed" | Name the actor when it helps clarity |
+
+### Style Patterns
+
+| # | Pattern | Before | After |
+|---|---------|--------|-------|
+| 14 | **Em/en dashes** | "institutions—not the people—yet this continues—" | Cut them: periods, commas, colons, or parentheses |
+| 15 | **Boldface overuse** | "**OKRs**, **KPIs**, **BMC**" | "OKRs, KPIs, BMC" |
+| 16 | **Inline-header lists** | "**Performance:** Performance improved" | Convert to prose |
+| 17 | **Title Case Headings** | "Strategic Negotiations And Partnerships" | "Strategic negotiations and partnerships" |
+| 18 | **Emojis** | "🚀 Launch Phase: 💡 Key Insight:" | Remove emojis |
+| 19 | **Curly quotes** | `said “the project”` | `said “the project”` |
+| 26 | **Hyphenated word pairs** | “cross-functional, data-driven, client-facing” | Drop hyphens on common word pairs |
+| 27 | **Persuasive authority tropes** | "At its core, what matters is..." | State the point directly |
+| 28 | **Signposting announcements** | "Let's dive in", "Here's what you need to know" | Start with the content |
+| 29 | **Fragmented headers** | "## Performance" + "Speed matters." | Let the heading do the work |
+| 30 | **Diff-anchored writing** | "This function was added to replace..." | Describe what it does, not what changed |
+| 31 | **Manufactured punchlines / staccato drama** | "It had no preference. No prior. No nostalgia." | Use varied sentence lengths and concrete claims |
+| 32 | **Aphorism formulas** | "Symmetry is the language of trust" | Replace the formula with the actual claim |
+| 33 | **Conversational rhetorical openers** | "Honestly? It depends..." | Remove the fake-candid setup |
+
+### Communication Patterns
+
+| # | Pattern | Before | After |
+|---|---------|--------|-------|
+| 20 | **Chatbot artifacts** | "I hope this helps! Let me know if..." | Remove entirely |
+| 21 | **Cutoff disclaimers** | "While details are limited in available sources..." | Find sources or remove |
+| 22 | **Sycophantic tone** | "Great question! You're absolutely right!" | Respond directly |
+
+### Filler and Hedging
+
+| # | Pattern | Before | After |
+|---|---------|--------|-------|
+| 23 | **Filler phrases** | "In order to", "Due to the fact that" | "To", "Because" |
+| 24 | **Excessive hedging** | "could potentially possibly" | "may" |
+| 25 | **Generic conclusions** | "The future looks bright" | Specific plans or facts |
+
+## Full Example
+
+**Before (AI-sounding):**
+> I recently spent five unforgettable days in Lisbon, and let me tell you — this city completely stole my heart. From the moment I arrived, I knew I was somewhere truly special.
+>
+> Nestled along the banks of the Tagus River, Lisbon stands as a vibrant testament to Portugal's enduring spirit, where rich history and modern energy intertwine at every turn. Yes, the famous hills are challenging — my legs certainly felt it! — but every climb rewards you with breathtaking, panoramic views that make it all worthwhile.
+>
+> No trip would be complete without riding the iconic Tram 28, winding through the city's most historic neighborhoods. And the food? Simply divine. The original pastéis de nata at Pastéis de Belém are a beloved national treasure, and savoring one still warm was a moment I will never forget.
+>
+> But what truly makes Lisbon special isn't just the sights — it's the feeling. Wander a few steps off the main squares and you'll discover a quieter, more authentic side: sun-drenched alleys, charming tiled facades, and friendly locals going about their daily lives, inviting you to slow down and savor every moment.
+>
+> Of course, the must-see São Jorge Castle offers stunning views over the rooftops below. The queues can be long, but the experience is absolutely worth it for any history buff or curious traveler.
+>
+> Would I go back? Absolutely. Lisbon isn't just a place to visit — it's a place to fall in love with, again and again. If you're dreaming of your next getaway, this is one destination that promises memories to last a lifetime. ✨
+
+**After (Humanized):**
+> I spent five days in Lisbon last October and still have mixed feelings about it. Beautiful, yes. Also harder on the knees than anyone warned me.
+>
+> The hills are the whole story and somehow never make the brochures. My hotel was up in Alfama, which photographs beautifully and translates, in practice, to climbing what felt like a six-story staircase every time I wanted coffee. By the second day my calves had opinions. I started planning each walk around which way was downhill, which is a strange way to see a city but probably an honest one.
+>
+> Everyone says to ride Tram 28, so I did, wedged against a stranger's backpack for forty minutes while three tour groups filmed the same corner. I would walk the route next time, or go before breakfast. The custard tarts, though, earn the fuss. I had one at a plain little place in Graça, still warm, and for about thirty seconds I understood why people build trips around pastry.
+>
+> What I did not expect was how quiet the city gets away from the main squares. Two blocks uphill from any plaza it turns into laundry lines, chipped tile, open windows, and old men watching football with the sound turned up. That is the Lisbon I keep thinking about, not the castle.
+>
+> The castle is fine. The view is great, the queue is long, and I spent more time shuffling toward the entrance than looking at anything once I got inside. If I had only two days, I would trade it for an afternoon of getting lost.
+>
+> I would go back, but in spring and with better shoes. Lisbon does not bend over backward to make things easy for you. I think I liked that, even when my legs disagreed.
+
+## References
+
+- [Wikipedia: Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing) - Primary source
+- [WikiProject AI Cleanup](https://en.wikipedia.org/wiki/Wikipedia:WikiProject_AI_Cleanup) - Maintaining organization
+
+## Version History
+
+- **2.8.2** - Replaced the full before/after example with a first-person Lisbon trip recap. The after now keeps the same topic, perspective, and rough length as the before while removing the AI tells without becoming clipped or slogan-like. No change to the 33 patterns.
+- **2.8.1** - Added cross-agent installation docs, optional Claude Code plugin packaging, and a compact secondhand-text false-positive guard. No change to the 33 patterns.
+- **2.8.0** - Added style/cadence patterns #31-33 for manufactured punchlines, aphorism formulas, and conversational rhetorical openers; expanded #20 to catch offer-to-continue chatbot closers. 33 patterns total.
+- **2.7.0** - Added pattern #30 (diff-anchored writing); made em/en dashes a hard cut rather than "overuse"; expanded #21 to cover speculative gap-filling ("maintains a low profile"). 30 patterns total.
+- **2.6.0** - Cleanup pass: consolidated the duplicated workflow sections, gated the personality guidance to content where voice is wanted, removed the model-fingerprinting subsection, and condensed the worked example. No change to the 29 patterns.
+- **2.5.1** - Added a passive-voice / subjectless-fragment rule, raising the total to 29 patterns
+- **2.5.0** - Added patterns for persuasive framing, signposting, and fragmented headers; expanded negative parallelisms to cover tailing negations; tightened wording around em dash overuse; fixed frontmatter wording to use "filler phrases"
+- **2.4.0** - Added voice calibration: match the user's personal writing style from samples
+- **2.3.0** - Added pattern #25: hyphenated word pair overuse
+- **2.2.0** - Added a final "obviously AI generated" audit + second-pass rewrite prompts
+- **2.1.1** - Fixed pattern #18 example (curly quotes vs straight quotes)
+- **2.1.0** - Added before/after examples for all 24 patterns
+- **2.0.0** - Complete rewrite based on raw Wikipedia article content
+- **1.0.0** - Initial release
+
+## License
+
+MIT
